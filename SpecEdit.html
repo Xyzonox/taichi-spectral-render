@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Generalized Spectral Vector Generator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom styles for better input appearance */
+        input[type="number"], select {
+            @apply w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500;
+        }
+        label {
+            @apply block text-sm font-medium text-gray-700 mb-1;
+        }
+        button {
+            @apply px-4 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50;
+        }
+        h3 {
+            @apply text-lg font-semibold text-gray-800 border-b pb-2 mb-4;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <div class="max-w-7xl mx-auto">
+            <header class="text-center mb-8">
+                <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">Generalized Spectral Vector Generator</h1>
+                <p class="mt-2 text-md text-gray-600">Create and edit 1D, 2D, or 3D spectral data curves and export them as a text file.</p>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Controls Column -->
+                <div class="lg:col-span-1 space-y-6 bg-white p-6 rounded-lg shadow-md">
+                    <div>
+                        <h3 class="border-b-0">Controls</h3>
+                    </div>
+                    <!-- Spectrum Generation -->
+                    <div class="space-y-4">
+                        <h3 class="mt-0">Spectrum Generation</h3>
+                        <div>
+                            <label for="start">Start (nm)</label>
+                            <input id="start" type="number" value="380">
+                        </div>
+                        <div>
+                            <label for="end">End (nm)</label>
+                            <input id="end" type="number" value="780">
+                        </div>
+                        <div>
+                            <label for="numPoints">Number of Points</label>
+                            <input id="numPoints" type="number" value="81">
+                        </div>
+                         <div>
+                            <label for="numDimensions">Number of Dimensions</label>
+                            <select id="numDimensions">
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3" selected>3</option>
+                            </select>
+                        </div>
+                        <p class="text-sm text-gray-600">Calculated Step Size: <span id="stepSize" class="font-semibold">5.00</span> nm</p>
+                    </div>
+
+                    <!-- Dynamic Curve Controls -->
+                    <div class="space-y-4">
+                         <h3>Curve Controls</h3>
+                         <div id="curveSelectContainer">
+                            <!-- Dynamic select dropdown will be injected here -->
+                         </div>
+                         <div id="curveVisibilityContainer" class="space-y-2">
+                            <!-- Dynamic checkboxes will be injected here -->
+                         </div>
+                         <div id="curveAmplitudeContainer" class="space-y-4">
+                            <!-- Dynamic amplitude sliders will be injected here -->
+                         </div>
+                    </div>
+                </div>
+
+                <!-- Editor and Output Column -->
+                <div class="lg:col-span-2 space-y-6">
+                    <!-- Curve Editor -->
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <h3>Curve Editor</h3>
+                        <p class="text-sm text-gray-600 mb-4">Select a curve to edit. Double-click to add points. Drag points or handles to adjust the Bezier curve.</p>
+                        <div class="w-full aspect-w-2 aspect-h-1 bg-gray-100 rounded-md">
+                             <canvas id="curveEditor" class="w-full h-full" style="border:1px solid #d1d5db;"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Output -->
+                    <div class="bg-white p-6 rounded-lg shadow-md">
+                        <h3>Output</h3>
+                        <textarea id="output" rows="10" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm" readonly></textarea>
+                        <div class="mt-4 flex flex-wrap gap-4">
+                            <button id="generate">Generate Data</button>
+                            <button id="export">Export as Text File</button>
+                            <button id="copy">Copy to Clipboard</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const canvas = document.getElementById('curveEditor');
+        const ctx = canvas.getContext('2d');
+
+        // --- State ---
+        let curvePoints = [];
+        const curveColors = ['#EF4444', '#22C55E', '#3B82F6']; // Red, Green, Blue
+        const curveNames = ['Curve 1', 'Curve 2', 'Curve 3'];
+        let selectedPoint = null;
+        const initialPoints = () => JSON.parse(JSON.stringify([
+            {x: 0, y: 0, hLeft: {dx: 0, dy: 0}, hRight: {dx: 0.33, dy: 0}},
+            {x: 1, y: 0, hLeft: {dx: -0.33, dy: 0}, hRight: {dx: 0, dy: 0}}
+        ]));
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            updateDimensionControls();
+            resizeCanvas();
+        });
+        
+        window.addEventListener('resize', resizeCanvas);
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            drawCurve();
+        }
+
+        // --- UI and Control Management ---
+        function updateDimensionControls() {
+            const numDimensions = parseInt(document.getElementById('numDimensions').value, 10);
+            const selectContainer = document.getElementById('curveSelectContainer');
+            const visibilityContainer = document.getElementById('curveVisibilityContainer');
+            const amplitudeContainer = document.getElementById('curveAmplitudeContainer');
+
+            // Clear existing controls
+            selectContainer.innerHTML = '';
+            visibilityContainer.innerHTML = '';
+            amplitudeContainer.innerHTML = '';
+            
+            // Reset curve data
+            curvePoints = [];
+
+            // Create new controls
+            const selectLabel = document.createElement('label');
+            selectLabel.htmlFor = 'editCurve';
+            selectLabel.textContent = 'Edit Curve:';
+            const select = document.createElement('select');
+            select.id = 'editCurve';
+            select.className = 'w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500';
+            select.addEventListener('change', drawCurve);
+
+            for (let i = 0; i < numDimensions; i++) {
+                // Add curve data
+                curvePoints.push(initialPoints());
+
+                // Edit dropdown option
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = curveNames[i];
+                select.appendChild(option);
+
+                // Visibility checkbox
+                const checkLabel = document.createElement('label');
+                checkLabel.className = 'flex items-center space-x-2 text-sm';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `showCurve${i}`;
+                checkbox.checked = true;
+                checkbox.className = 'h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500';
+                checkbox.addEventListener('change', drawCurve);
+                checkLabel.appendChild(checkbox);
+                const checkText = document.createElement('span');
+                checkText.textContent = `Show ${curveNames[i]}`;
+                checkLabel.appendChild(checkText);
+                visibilityContainer.appendChild(checkLabel);
+
+                // Amplitude input
+                const ampLabel = document.createElement('label');
+                ampLabel.htmlFor = `amp${i}`;
+                ampLabel.textContent = `${curveNames[i]} Amplitude`;
+                const ampInput = document.createElement('input');
+                ampInput.type = 'number';
+                ampInput.id = `amp${i}`;
+                ampInput.value = '1.0';
+                ampInput.step = '0.01';
+                amplitudeContainer.appendChild(ampLabel);
+                amplitudeContainer.appendChild(ampInput);
+            }
+            selectContainer.appendChild(selectLabel);
+            selectContainer.appendChild(select);
+            
+            updateStep();
+            drawCurve();
+        }
+        
+        // --- Canvas Drawing ---
+        function drawCurve() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawAxes();
+
+            const numDimensions = parseInt(document.getElementById('numDimensions').value, 10);
+            for (let i = 0; i < numDimensions; i++) {
+                if (document.getElementById(`showCurve${i}`).checked) {
+                    const points = curvePoints[i];
+                    ctx.strokeStyle = curveColors[i];
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(points[0].x * canvas.width, (1 - points[0].y) * canvas.height);
+                    for (let j = 1; j < points.length; j++) {
+                        const p0 = points[j - 1];
+                        const p1 = points[j];
+                        const c1x = (p0.x + p0.hRight.dx) * canvas.width;
+                        const c1y = (1 - (p0.y + p0.hRight.dy)) * canvas.height;
+                        const c2x = (p1.x + p1.hLeft.dx) * canvas.width;
+                        const c2y = (1 - (p1.y + p1.hLeft.dy)) * canvas.height;
+                        ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p1.x * canvas.width, (1 - p1.y) * canvas.height);
+                    }
+                    ctx.stroke();
+                }
+            }
+
+            // Draw points and handles for the currently selected curve
+            const currentCurveIndex = parseInt(document.getElementById('editCurve').value, 10);
+            if(isNaN(currentCurveIndex) || !curvePoints[currentCurveIndex]) return;
+
+            const points = curvePoints[currentCurveIndex];
+            ctx.fillStyle = curveColors[currentCurveIndex];
+            for (const p of points) {
+                const px = p.x * canvas.width;
+                const py = (1 - p.y) * canvas.height;
+                // Main point
+                ctx.beginPath();
+                ctx.arc(px, py, 6, 0, 2 * Math.PI);
+                ctx.fill();
+
+                // Handles
+                const hlx = (p.x + p.hLeft.dx) * canvas.width;
+                const hly = (1 - (p.y + p.hLeft.dy)) * canvas.height;
+                const hrx = (p.x + p.hRight.dx) * canvas.width;
+                const hry = (1 - (p.y + p.hRight.dy)) * canvas.height;
+
+                ctx.strokeStyle = '#9CA3AF'; // Gray
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(hlx, hly);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(hrx, hry);
+                ctx.stroke();
+
+                ctx.fillStyle = '#F87171'; // Lighter Red for handles
+                ctx.beginPath();
+                ctx.arc(hlx, hly, 4, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(hrx, hry, 4, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        }
+
+        function drawAxes() {
+            const startWl = parseFloat(document.getElementById('start').value);
+            const endWl = parseFloat(document.getElementById('end').value);
+
+            ctx.save();
+            ctx.strokeStyle = '#D1D5DB'; // Light Gray
+            ctx.fillStyle = '#6B7280';   // Medium Gray for text
+            ctx.font = '12px Inter';
+            ctx.lineWidth = 1;
+
+            // Y-Axis (Value)
+            for (let i = 0; i <= 5; i++) {
+                const val = i * 0.2;
+                const y = (1 - val) * canvas.height;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.globalAlpha = 0.2;
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+                ctx.fillText(val.toFixed(1), 5, y - 5 > 10 ? y - 5 : 15);
+            }
+
+            // X-Axis (Wavelength)
+            const numLabels = 5;
+            for (let i = 0; i <= numLabels; i++) {
+                const x = (i / numLabels) * canvas.width;
+                const wl = startWl + (i / numLabels) * (endWl - startWl);
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.globalAlpha = 0.2;
+                ctx.stroke();
+                ctx.globalAlpha = 1.0;
+                ctx.fillText(Math.round(wl) + 'nm', x + 5, canvas.height - 5);
+            }
+            ctx.restore();
+        }
+
+        // --- Event Handling ---
+        function setupEventListeners() {
+            document.getElementById('start').addEventListener('input', () => { updateStep(); drawCurve(); });
+            document.getElementById('end').addEventListener('input', () => { updateStep(); drawCurve(); });
+            document.getElementById('numPoints').addEventListener('input', updateStep);
+            document.getElementById('numDimensions').addEventListener('change', updateDimensionControls);
+            document.getElementById('generate').addEventListener('click', generateData);
+            document.getElementById('export').addEventListener('click', exportToFile);
+            document.getElementById('copy').addEventListener('click', copyToClipboard);
+
+            canvas.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('dblclick', onDoubleClick);
+        }
+
+        function getCurrentPoints() {
+            const index = parseInt(document.getElementById('editCurve').value, 10);
+            return curvePoints[index];
+        }
+
+        function onMouseDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) / canvas.width;
+            const my = 1 - (e.clientY - rect.top) / canvas.height;
+            const hitRadius = 0.03;
+            selectedPoint = null;
+            const points = getCurrentPoints();
+            if (!points) return;
+
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                if (Math.hypot(p.x - mx, p.y - my) < hitRadius) {
+                    selectedPoint = {type: 'point', index: i}; return;
+                }
+                if (Math.hypot((p.x + p.hLeft.dx) - mx, (p.y + p.hLeft.dy) - my) < hitRadius) {
+                    selectedPoint = {type: 'handle', index: i, side: 'left'}; return;
+                }
+                if (Math.hypot((p.x + p.hRight.dx) - mx, (p.y + p.hRight.dy) - my) < hitRadius) {
+                    selectedPoint = {type: 'handle', index: i, side: 'right'}; return;
+                }
+            }
+        }
+
+        function onMouseMove(e) {
+            if (!selectedPoint) return;
+            const rect = canvas.getBoundingClientRect();
+            let mx = (e.clientX - rect.left) / canvas.width;
+            let my = 1 - (e.clientY - rect.top) / canvas.height;
+            mx = Math.max(0, Math.min(1, mx));
+            my = Math.max(0, Math.min(1, my));
+            
+            const points = getCurrentPoints();
+            const p = points[selectedPoint.index];
+            if (selectedPoint.type === 'point') {
+                // Prevent first and last points from moving horizontally
+                if (selectedPoint.index > 0 && selectedPoint.index < points.length -1) {
+                    p.x = mx;
+                }
+                p.y = my;
+            } else if (selectedPoint.side === 'left') {
+                p.hLeft.dx = mx - p.x;
+                p.hLeft.dy = my - p.y;
+            } else {
+                p.hRight.dx = mx - p.x;
+                p.hRight.dy = my - p.y;
+            }
+            drawCurve();
+        }
+
+        function onMouseUp() {
+            if (selectedPoint) {
+                const points = getCurrentPoints();
+                points.sort((a, b) => a.x - b.x);
+                drawCurve();
+                selectedPoint = null;
+            }
+        }
+
+        function onDoubleClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) / canvas.width;
+            const my = 1 - (e.clientY - rect.top) / canvas.height;
+            const points = getCurrentPoints();
+            points.push({
+                x: Math.max(0, Math.min(1, mx)),
+                y: Math.max(0, Math.min(1, my)),
+                hLeft: {dx: -0.05, dy: 0},
+                hRight: {dx: 0.05, dy: 0}
+            });
+            points.sort((a, b) => a.x - b.x);
+            drawCurve();
+        }
+
+        // --- Data Generation and Export ---
+        function getYAtX(points, targetX) {
+            if (targetX <= points[0].x) return points[0].y;
+            if (targetX >= points[points.length - 1].x) return points[points.length - 1].y;
+
+            for(let i = 1; i < points.length; i++) {
+                const p0 = points[i-1];
+                const p1 = points[i];
+                if (targetX >= p0.x && targetX <= p1.x) {
+                    const t = (targetX - p0.x) / (p1.x - p0.x);
+                     if (isNaN(t)) return p0.y; // Avoid division by zero if points overlap
+
+                    const c1 = {x: p0.x + p0.hRight.dx, y: p0.y + p0.hRight.dy};
+                    const c2 = {x: p1.x + p1.hLeft.dx, y: p1.y + p1.hLeft.dy};
+                    
+                    const t1 = 1 - t;
+                    const y = t1**3 * p0.y + 3 * t1**2 * t * c1.y + 3 * t1 * t**2 * c2.y + t**3 * p1.y;
+                    return Math.max(0, Math.min(1, y)); // Clamp value between 0 and 1
+                }
+            }
+            return 0;
+        }
+
+        function generateData() {
+            const start = parseFloat(document.getElementById('start').value);
+            const end = parseFloat(document.getElementById('end').value);
+            const numPts = parseInt(document.getElementById('numPoints').value);
+            const numDims = parseInt(document.getElementById('numDimensions').value);
+            if (isNaN(start) || isNaN(end) || isNaN(numPts) || numPts < 2) {
+                alert('Invalid spectrum settings.'); return;
+            }
+
+            const step = (end - start) / (numPts - 1);
+            let data = '';
+            
+            const amplitudes = [];
+            for (let i = 0; i < numDims; i++) {
+                const amp = parseFloat(document.getElementById(`amp${i}`).value);
+                if (isNaN(amp)) {
+                    alert(`Invalid amplitude for Curve ${i+1}.`); return;
+                }
+                amplitudes.push(amp);
+            }
+
+            for (let i = 0; i < numPts; i++) {
+                const normX = (numPts === 1) ? 0 : i / (numPts - 1);
+                const wl = start + i * step;
+                let line = Math.round(wl).toString();
+
+                for (let j = 0; j < numDims; j++) {
+                    const normY = getYAtX(curvePoints[j], normX);
+                    const val = normY * amplitudes[j];
+                    line += ' ' + val.toFixed(5);
+                }
+                data += line + '\n';
+            }
+            document.getElementById('output').value = data;
+        }
+
+        function updateStep() {
+            const start = parseFloat(document.getElementById('start').value);
+            const end = parseFloat(document.getElementById('end').value);
+            const num = parseInt(document.getElementById('numPoints').value);
+            if (!isNaN(start) && !isNaN(end) && !isNaN(num) && num > 1) {
+                const step = (end - start) / (num - 1);
+                document.getElementById('stepSize').innerText = step.toFixed(2);
+            } else {
+                 document.getElementById('stepSize').innerText = 'N/A';
+            }
+        }
+
+        function exportToFile() {
+            const text = document.getElementById('output').value;
+            if (!text) {
+                alert("Please generate data first."); return;
+            }
+            const blob = new Blob([text], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'spectral_vector_data.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function copyToClipboard() {
+            const text = document.getElementById('output').value;
+            if (!text) {
+                alert("Please generate data first."); return;
+            }
+            // Use the clipboard API
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => {
+                    alert('Copied to clipboard!');
+                }).catch(err => {
+                    alert('Failed to copy text.');
+                });
+            } else {
+                // Fallback for older browsers
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed"; 
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    alert('Copied to clipboard!');
+                } catch (err) {
+                    alert('Fallback copy failed.');
+                }
+                document.body.removeChild(textArea);
+            }
+        }
+    </script>
+</body>
+</html>
