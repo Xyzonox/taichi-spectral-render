@@ -1,6 +1,6 @@
 # Taichi Spectral Render
 
-This project is a physically-based, hyperspectral path tracing engine developed using Python and Taichi Lang. Unlike traditional RGB renderers, this engine operates in the spectral domain, simulating light transport across a discrete set of wavelengths to accurately capture complex optical phenomena like dispersion, fluorescence, and wavelength-dependent absorption.
+This project is a physically-based, multi-spectral path tracing engine developed using Python and Taichi Lang. Unlike traditional RGB renderers, this engine operates in the spectral domain, simulating light transport across a discrete set of wavelengths to accurately capture complex optical phenomena like dispersion, fluorescence, and wavelength-dependent absorption.
 
 ### Key Features
 
