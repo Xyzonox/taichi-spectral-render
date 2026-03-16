@@ -1,6 +1,7 @@
 # colour_system.py
 import numpy as np
 import yaml
+from scipy.interpolate import RectBivariateSpline
 
 class RefractiveIndex:
     """
@@ -140,3 +141,42 @@ class SpecularVec:
         interp = np.interp(self.target_wavelengths, source_wavelengths, source_values) * scale
 
         return interp.tolist()
+
+class EEMMatrix:
+    _next_eem_id = 1
+    def __init__(self, wavelength_min, wavelength_max, spectral_bands, file_path=None, matrix=None):
+        self.target_wavelengths = np.linspace(wavelength_min, wavelength_max, spectral_bands)
+        if file_path:
+            self.matrix = self._load_and_interpolate(file_path)
+        elif matrix:
+            self.matrix = matrix
+        else:
+            raise ValueError(
+                "EEMMatrix Missing file_path and Matrix, one of either must be provided"
+            )
+
+        self.id = EEMMatrix._next_eem_id
+        EEMMatrix._next_eem_id += 1
+
+    def _load_and_interpolate(self, file_path):
+        # Load the raw text file 
+        raw_data = np.loadtxt(file_path, comments='#')
+        
+        # Extract axes and values
+        source_emissions = raw_data[0, 1:]
+        source_excitations = raw_data[1:, 0]
+        z_values = raw_data[1:, 1:]
+        
+        # reate a 2D interpolator
+        interpolator = RectBivariateSpline(source_excitations, source_emissions, z_values)
+        
+        # Evaluate across your engine's target spectral bands
+        interpolated_matrix = interpolator(self.target_wavelengths, self.target_wavelengths)
+        
+        # Enforce Stokes Shift (zero out where emission <= excitation)
+        for i in range(len(self.target_wavelengths)):
+            for j in range(len(self.target_wavelengths)):
+                if self.target_wavelengths[j] <= self.target_wavelengths[i]:
+                    interpolated_matrix[i, j] = 0.0
+
+        return np.maximum(0, interpolated_matrix) # Prevent negative interpolation artifacts

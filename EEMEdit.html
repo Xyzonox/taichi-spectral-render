@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EEM Generator (Excitation-Emission Matrix)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        input[type="number"], select {
+            @apply w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500;
+        }
+        label { @apply block text-sm font-medium text-gray-700 mb-1; }
+        button {
+            @apply px-4 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors;
+        }
+        h3 { @apply text-lg font-semibold text-gray-800 border-b pb-2 mb-4; }
+        .heatmap-container { position: relative; }
+        .axis-label-y { position: absolute; left: -30px; top: 50%; transform: translateY(-50%) rotate(-90deg); font-size: 0.75rem; color: #4B5563; white-space: nowrap;}
+        .axis-label-x { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: #4B5563; }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <div class="max-w-7xl mx-auto">
+            <header class="text-center mb-8">
+                <h1 class="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">EEM Generator</h1>
+                <p class="mt-2 text-md text-gray-600">Visually design Excitation-Emission Matrices for volumetric fluorescence.</p>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <!-- Controls Column -->
+                <div class="lg:col-span-3 space-y-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                        <h3 class="mt-0">Spectrum Settings</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="start">Start Wavelength (nm)</label>
+                                <input id="start" type="number" value="380">
+                            </div>
+                            <div>
+                                <label for="end">End Wavelength (nm)</label>
+                                <input id="end" type="number" value="780">
+                            </div>
+                            <div>
+                                <label for="numPoints">Number of Bins (Bands)</label>
+                                <input id="numPoints" type="number" value="81">
+                            </div>
+                            <p class="text-sm text-gray-500 bg-gray-50 p-2 rounded">Step Size: <span id="stepSize" class="font-mono font-semibold text-indigo-600">5.00</span> nm</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                        <h3 class="mt-0">Curve Controls</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="editCurve">Currently Editing:</label>
+                                <select id="editCurve">
+                                    <option value="0">Excitation (Absorption)</option>
+                                    <option value="1">Emission (Fluorescence)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="space-y-2 pt-2 border-t border-gray-100">
+                                <label class="flex items-center space-x-2 text-sm">
+                                    <input type="checkbox" id="showCurve0" checked class="h-4 w-4 text-purple-600 rounded">
+                                    <span class="font-medium text-purple-700">Show Excitation</span>
+                                </label>
+                                <label class="flex items-center space-x-2 text-sm">
+                                    <input type="checkbox" id="showCurve1" checked class="h-4 w-4 text-orange-500 rounded">
+                                    <span class="font-medium text-orange-600">Show Emission</span>
+                                </label>
+                            </div>
+
+                            <div class="pt-2 border-t border-gray-100">
+                                <label for="amplitude">Global Quantum Yield (Amp)</label>
+                                <input id="amplitude" type="number" value="1.0" step="0.1" min="0">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Middle Column: Editor -->
+                <div class="lg:col-span-6 space-y-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                        <div class="flex justify-between items-center mb-4 border-b pb-2">
+                            <h3 class="border-0 mb-0 pb-0">Spectral Curves</h3>
+                            <span class="text-xs text-gray-500">Double-click to add points. Drag to edit.</span>
+                        </div>
+                        <div class="w-full aspect-w-16 aspect-h-9 bg-gray-50 rounded-lg overflow-hidden relative" style="min-height: 350px;">
+                             <canvas id="curveEditor" class="absolute inset-0 w-full h-full border border-gray-200 rounded-lg"></canvas>
+                        </div>
+                        <div class="mt-4 text-sm text-gray-600 bg-blue-50 p-3 rounded-md border border-blue-100">
+                            <strong>Physics Note:</strong> The material absorbs light according to the <span class="text-purple-600 font-semibold">Excitation</span> curve, and re-emits it according to the <span class="text-orange-500 font-semibold">Emission</span> curve.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Heatmap & Output -->
+                <div class="lg:col-span-3 space-y-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                        <h3>2D EEM Heatmap</h3>
+                        <div class="heatmap-container aspect-square w-full pl-6 pb-6">
+                            <canvas id="heatmapCanvas" class="w-full h-full bg-black rounded-sm" width="200" height="200"></canvas>
+                            <div class="axis-label-y">Excitation (nm) →</div>
+                            <div class="axis-label-x">Emission (nm) →</div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-4 text-center">Black area denotes the Stokes Shift cutoff (Emission ≤ Excitation).</p>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                        <h3>Export</h3>
+                        <div class="flex flex-col gap-3">
+                            <button id="generate" class="w-full bg-indigo-100 text-indigo-700 hover:bg-indigo-200">Generate Text Array</button>
+                            <textarea id="output" rows="4" class="w-full p-2 border border-gray-300 rounded-md font-mono text-xs whitespace-pre bg-gray-50" readonly placeholder="Click Generate to preview output..."></textarea>
+                            <div class="flex gap-2">
+                                <button id="copy" class="w-1/2 bg-gray-600 hover:bg-gray-700">Copy</button>
+                                <button id="export" class="w-1/2">Save .txt</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const canvas = document.getElementById('curveEditor');
+        const ctx = canvas.getContext('2d');
+        const heatmap = document.getElementById('heatmapCanvas');
+        const heatCtx = heatmap.getContext('2d');
+
+        // --- State ---
+        // curvePoints[0] = Excitation, curvePoints[1] = Emission
+        let curvePoints = [
+            // Excitation (Peaks earlier)
+            [
+                {x: 0.0, y: 0.0, hLeft: {dx: 0, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 0.3, y: 0.8, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 0.5, y: 0.0, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 1.0, y: 0.0, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0, dy: 0}}
+            ],
+            // Emission (Peaks later - Stokes shifted)
+            [
+                {x: 0.0, y: 0.0, hLeft: {dx: 0, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 0.4, y: 0.0, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 0.7, y: 0.9, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0.1, dy: 0}},
+                {x: 1.0, y: 0.0, hLeft: {dx: -0.1, dy: 0}, hRight: {dx: 0, dy: 0}}
+            ]
+        ];
+        
+        const curveColors = ['#9333EA', '#F97316']; // Purple, Orange
+        let selectedPoint = null;
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            updateStep();
+            resizeCanvas();
+        });
+        
+        window.addEventListener('resize', resizeCanvas);
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            drawCurve();
+        }
+
+        // --- Canvas Drawing (Editor) ---
+        function drawCurve() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawAxes();
+
+            for (let i = 0; i < 2; i++) {
+                if (document.getElementById(`showCurve${i}`).checked) {
+                    const points = curvePoints[i];
+                    ctx.strokeStyle = curveColors[i];
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    
+                    // Start from the very left edge
+                    if (points[0].x > 0) {
+                        ctx.moveTo(0, (1 - points[0].y) * canvas.height);
+                        ctx.lineTo(points[0].x * canvas.width, (1 - points[0].y) * canvas.height);
+                    } else {
+                        ctx.moveTo(points[0].x * canvas.width, (1 - points[0].y) * canvas.height);
+                    }
+                    
+                    for (let j = 1; j < points.length; j++) {
+                        const p0 = points[j - 1];
+                        const p1 = points[j];
+                        const c1x = (p0.x + p0.hRight.dx) * canvas.width;
+                        const c1y = (1 - (p0.y + p0.hRight.dy)) * canvas.height;
+                        const c2x = (p1.x + p1.hLeft.dx) * canvas.width;
+                        const c2y = (1 - (p1.y + p1.hLeft.dy)) * canvas.height;
+                        ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p1.x * canvas.width, (1 - p1.y) * canvas.height);
+                    }
+                    
+                    // Extend to the very right edge
+                    if (points[points.length - 1].x < 1) {
+                        ctx.lineTo(canvas.width, (1 - points[points.length - 1].y) * canvas.height);
+                    }
+                    ctx.stroke();
+
+                    // Fill area under curve lightly
+                    ctx.lineTo(canvas.width, canvas.height);
+                    ctx.lineTo(0, canvas.height);
+                    ctx.fillStyle = curveColors[i] + '20'; // 20 hex = 12% opacity
+                    ctx.fill();
+                }
+            }
+
+            // Draw points and handles for the currently selected curve
+            const currentCurveIndex = parseInt(document.getElementById('editCurve').value, 10);
+            const points = curvePoints[currentCurveIndex];
+            
+            for (const p of points) {
+                const px = p.x * canvas.width;
+                const py = (1 - p.y) * canvas.height;
+                
+                // Handles
+                const hlx = (p.x + p.hLeft.dx) * canvas.width;
+                const hly = (1 - (p.y + p.hLeft.dy)) * canvas.height;
+                const hrx = (p.x + p.hRight.dx) * canvas.width;
+                const hry = (1 - (p.y + p.hRight.dy)) * canvas.height;
+
+                ctx.strokeStyle = '#9CA3AF'; // Gray
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, py); ctx.lineTo(hlx, hly); ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(px, py); ctx.lineTo(hrx, hry); ctx.stroke();
+
+                // Handle dots
+                ctx.fillStyle = '#6B7280';
+                ctx.beginPath(); ctx.arc(hlx, hly, 4, 0, 2 * Math.PI); ctx.fill();
+                ctx.beginPath(); ctx.arc(hrx, hry, 4, 0, 2 * Math.PI); ctx.fill();
+
+                // Main point
+                ctx.fillStyle = curveColors[currentCurveIndex];
+                ctx.beginPath();
+                ctx.arc(px, py, 6, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // Always update heatmap when curve redraws
+            drawHeatmap();
+        }
+
+        function drawAxes() {
+            const startWl = parseFloat(document.getElementById('start').value);
+            const endWl = parseFloat(document.getElementById('end').value);
+
+            ctx.save();
+            ctx.strokeStyle = '#E5E7EB'; 
+            ctx.fillStyle = '#6B7280';  
+            ctx.font = '12px Inter';
+            ctx.lineWidth = 1;
+
+            // Y-Axis
+            for (let i = 0; i <= 5; i++) {
+                const val = i * 0.2;
+                const y = (1 - val) * canvas.height;
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+                ctx.fillText(val.toFixed(1), 5, y - 5 > 10 ? y - 5 : 15);
+            }
+
+            // X-Axis
+            const numLabels = 10;
+            for (let i = 0; i <= numLabels; i++) {
+                const x = (i / numLabels) * canvas.width;
+                const wl = startWl + (i / numLabels) * (endWl - startWl);
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+                ctx.fillText(Math.round(wl) + 'nm', x + 5, canvas.height - 5);
+            }
+            ctx.restore();
+        }
+
+        // --- Heatmap Drawing ---
+        function drawHeatmap() {
+            const numPts = parseInt(document.getElementById('numPoints').value) || 25;
+            const amp = parseFloat(document.getElementById('amplitude').value) || 1.0;
+            const w = heatmap.width;
+            const h = heatmap.height;
+            const cellW = w / numPts;
+            const cellH = h / numPts;
+
+            heatCtx.clearRect(0, 0, w, h);
+
+            for (let i = 0; i < numPts; i++) { // Y-axis: Excitation
+                const ex_norm = i / (numPts - 1);
+                const ex_val = getYAtX(curvePoints[0], ex_norm);
+
+                for (let j = 0; j < numPts; j++) { // X-axis: Emission
+                    const em_norm = j / (numPts - 1);
+                    const em_val = getYAtX(curvePoints[1], em_norm);
+
+                    // Stokes Shift Constraint: Emission wavelength MUST be > Excitation wavelength
+                    let val = 0;
+                    if (j > i) { 
+                        val = ex_val * em_val * amp;
+                    }
+
+                    // Map value to color (Black -> Blue -> Green -> Yellow)
+                    val = Math.max(0, Math.min(1, val)); // Clamp 0-1
+                    const r = Math.floor(val * 255);
+                    const g = Math.floor(Math.min(1, val * 1.5) * 255);
+                    const b = Math.floor(Math.max(0, 1 - val * 2) * 100);
+
+                    heatCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+                    // Y origin is bottom-left for graphs, so invert Y
+                    const yPos = h - (i + 1) * cellH;
+                    heatCtx.fillRect(j * cellW, yPos, cellW + 0.5, cellH + 0.5); // +0.5 to prevent seam lines
+                }
+            }
+
+            // Draw diagonal Stokes shift line
+            heatCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            heatCtx.lineWidth = 1;
+            heatCtx.setLineDash([4, 4]);
+            heatCtx.beginPath();
+            heatCtx.moveTo(0, h);
+            heatCtx.lineTo(w, 0);
+            heatCtx.stroke();
+            heatCtx.setLineDash([]);
+        }
+
+        // --- Event Handling ---
+        function setupEventListeners() {
+            document.getElementById('start').addEventListener('input', () => { updateStep(); drawCurve(); });
+            document.getElementById('end').addEventListener('input', () => { updateStep(); drawCurve(); });
+            document.getElementById('numPoints').addEventListener('input', () => { updateStep(); drawCurve(); });
+            document.getElementById('amplitude').addEventListener('input', drawHeatmap);
+            document.getElementById('editCurve').addEventListener('change', drawCurve);
+            document.getElementById('showCurve0').addEventListener('change', drawCurve);
+            document.getElementById('showCurve1').addEventListener('change', drawCurve);
+            document.getElementById('generate').addEventListener('click', generateData);
+            document.getElementById('export').addEventListener('click', exportToFile);
+            document.getElementById('copy').addEventListener('click', copyToClipboard);
+
+            canvas.addEventListener('mousedown', onMouseDown);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('dblclick', onDoubleClick);
+        }
+
+        function getCurrentPoints() {
+            const index = parseInt(document.getElementById('editCurve').value, 10);
+            return curvePoints[index];
+        }
+
+        function onMouseDown(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) / canvas.width;
+            const my = 1 - (e.clientY - rect.top) / canvas.height;
+            const hitRadius = 0.04;
+            selectedPoint = null;
+            const points = getCurrentPoints();
+
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                if (Math.hypot(p.x - mx, p.y - my) < hitRadius) {
+                    selectedPoint = {type: 'point', index: i}; return;
+                }
+                if (Math.hypot((p.x + p.hLeft.dx) - mx, (p.y + p.hLeft.dy) - my) < hitRadius) {
+                    selectedPoint = {type: 'handle', index: i, side: 'left'}; return;
+                }
+                if (Math.hypot((p.x + p.hRight.dx) - mx, (p.y + p.hRight.dy) - my) < hitRadius) {
+                    selectedPoint = {type: 'handle', index: i, side: 'right'}; return;
+                }
+            }
+        }
+
+        function onMouseMove(e) {
+            if (!selectedPoint) return;
+            const rect = canvas.getBoundingClientRect();
+            let mx = (e.clientX - rect.left) / canvas.width;
+            let my = 1 - (e.clientY - rect.top) / canvas.height;
+            mx = Math.max(0, Math.min(1, mx));
+            my = Math.max(0, Math.min(1, my));
+            
+            const points = getCurrentPoints();
+            const p = points[selectedPoint.index];
+            if (selectedPoint.type === 'point') {
+                if (selectedPoint.index > 0 && selectedPoint.index < points.length -1) {
+                    p.x = mx;
+                }
+                p.y = my;
+            } else if (selectedPoint.side === 'left') {
+                p.hLeft.dx = mx - p.x; p.hLeft.dy = my - p.y;
+            } else {
+                p.hRight.dx = mx - p.x; p.hRight.dy = my - p.y;
+            }
+            drawCurve();
+        }
+
+        function onMouseUp() {
+            if (selectedPoint) {
+                const points = getCurrentPoints();
+                points.sort((a, b) => a.x - b.x);
+                drawCurve();
+                selectedPoint = null;
+            }
+        }
+
+        function onDoubleClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) / canvas.width;
+            const my = 1 - (e.clientY - rect.top) / canvas.height;
+            const points = getCurrentPoints();
+            points.push({
+                x: Math.max(0, Math.min(1, mx)),
+                y: Math.max(0, Math.min(1, my)),
+                hLeft: {dx: -0.05, dy: 0},
+                hRight: {dx: 0.05, dy: 0}
+            });
+            points.sort((a, b) => a.x - b.x);
+            drawCurve();
+        }
+
+        // --- Data Extraction and Math ---
+        function getYAtX(points, targetX) {
+            if (targetX <= points[0].x) return points[0].y;
+            if (targetX >= points[points.length - 1].x) return points[points.length - 1].y;
+
+            for(let i = 1; i < points.length; i++) {
+                const p0 = points[i-1];
+                const p1 = points[i];
+                if (targetX >= p0.x && targetX <= p1.x) {
+                    const t = (targetX - p0.x) / (p1.x - p0.x);
+                    if (isNaN(t)) return p0.y;
+
+                    const c1 = {x: p0.x + p0.hRight.dx, y: p0.y + p0.hRight.dy};
+                    const c2 = {x: p1.x + p1.hLeft.dx, y: p1.y + p1.hLeft.dy};
+                    
+                    const t1 = 1 - t;
+                    const y = t1**3 * p0.y + 3 * t1**2 * t * c1.y + 3 * t1 * t**2 * c2.y + t**3 * p1.y;
+                    return Math.max(0, Math.min(1, y)); 
+                }
+            }
+            return 0;
+        }
+
+        function updateStep() {
+            const start = parseFloat(document.getElementById('start').value);
+            const end = parseFloat(document.getElementById('end').value);
+            const num = parseInt(document.getElementById('numPoints').value);
+            if (!isNaN(start) && !isNaN(end) && !isNaN(num) && num > 1) {
+                const step = (end - start) / (num - 1);
+                document.getElementById('stepSize').innerText = step.toFixed(2);
+            } else {
+                 document.getElementById('stepSize').innerText = 'N/A';
+            }
+        }
+
+        function generateData() {
+            const start = parseFloat(document.getElementById('start').value);
+            const end = parseFloat(document.getElementById('end').value);
+            const numPts = parseInt(document.getElementById('numPoints').value);
+            const amp = parseFloat(document.getElementById('amplitude').value);
+            
+            if (isNaN(start) || isNaN(end) || isNaN(numPts) || numPts < 2) {
+                alert('Invalid spectrum settings.'); return;
+            }
+
+            const step = (end - start) / (numPts - 1);
+            let data = '# EEM Data: Rows = Excitation, Cols = Emission\n';
+            
+            // Build the header row (0 followed by all emission wavelengths)
+            let headerRow = '0';
+            for (let j = 0; j < numPts; j++) {
+                headerRow += ' ' + (start + j * step).toFixed(2);
+            }
+            data += headerRow + '\n';
+
+            // Build the matrix rows
+            for (let i = 0; i < numPts; i++) {
+                let ex_wl = start + i * step;
+                let rowStr = ex_wl.toFixed(2);
+                let ex_val = getYAtX(curvePoints[0], i / (numPts - 1));
+
+                for (let j = 0; j < numPts; j++) {
+                    let em_wl = start + j * step;
+                    let em_val = getYAtX(curvePoints[1], j / (numPts - 1));
+                    
+                    let eem_val = 0.0;
+                    // Apply Stokes Shift: Emission wavelength must be strictly greater than Excitation
+                    // We use strictly greater (j > i) to simulate a slight gap, avoiding self-absorption loops
+                    if (j > i) {
+                        eem_val = ex_val * em_val * amp;
+                    }
+                    rowStr += ' ' + eem_val.toFixed(6);
+                }
+                data += rowStr + '\n';
+            }
+            document.getElementById('output').value = data;
+        }
+
+        function exportToFile() {
+            const text = document.getElementById('output').value;
+            if (!text) { alert("Please generate data first."); return; }
+            const blob = new Blob([text], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'fluorescence_eem.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function copyToClipboard() {
+            const text = document.getElementById('output').value;
+            if (!text) { alert("Please generate data first."); return; }
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => alert('Copied!')).catch(err => alert('Failed.'));
+            } else {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed"; 
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try { document.execCommand('copy'); alert('Copied!'); } catch (err) { alert('Failed.'); }
+                document.body.removeChild(textArea);
+            }
+        }
+    </script>
+</body>
+</html>

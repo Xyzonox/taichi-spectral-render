@@ -75,6 +75,15 @@ k_1 = data.SpecularVec(
     wavelength_min=WAVELENGTH_MIN,
     wavelength_max=WAVELENGTH_MAX)
 
+fluorescent_glass = data.EEMMatrix(
+    file_path='data/EEMs/uv_green.txt', 
+    wavelength_min=WAVELENGTH_MIN,
+    wavelength_max=WAVELENGTH_MAX,
+    spectral_bands=SPECTRAL_BANDS
+)
+
+numEEM = data.EEMMatrix._next_eem_id
+
 # --- Python Data Structures
 
 def create_scene():
@@ -84,7 +93,7 @@ def create_scene():
             "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
             "roughness": [0.0] * SPECTRAL_BANDS, 
             "is_true_volume": [1] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.02]* SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0]* SPECTRAL_BANDS,
             "anistropy_factor":[.8] * SPECTRAL_BANDS,
             "surface_emission": [0] * SPECTRAL_BANDS, 
             "emission": [0.0] * SPECTRAL_BANDS,
@@ -130,7 +139,7 @@ def create_scene():
             "is_true_volume": [0] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
             "surface_emission": [1] * SPECTRAL_BANDS, 
-            "emission": [40.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
+            "emission": [500.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
             "eem_id": 0
         },
         { # 5: Gold Metal
@@ -145,8 +154,8 @@ def create_scene():
         },
         { # 6: Fluorescent Glass Dielectric
             "refractive_index": [3.0] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [1e-4]*8 + [0.0]*(SPECTRAL_BANDS-8),
-            "roughness": [0.1] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [1e-2]*8 + [0.0]*(SPECTRAL_BANDS-8),
+            "roughness": [0.001] * SPECTRAL_BANDS, 
             "is_true_volume": [1] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
             "surface_emission": [0] * SPECTRAL_BANDS, 
@@ -159,8 +168,8 @@ def create_scene():
             "roughness": [0.001] * SPECTRAL_BANDS, 
             "is_true_volume": [1] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
+            "surface_emission": [1] * SPECTRAL_BANDS, 
+            "emission": [1.0] * SPECTRAL_BANDS,
             "eem_id": 0
         }
     ]
@@ -228,7 +237,7 @@ def create_scene():
         return {'vertices': final_vertices.tolist(), 'faces': faces, 'vertex_normals':vertex_normals.tolist(), 'material_id': material_id}
 
     meshes.append(create_sphere(center=[-0.4, -0.7, -0.3], radius=0.3, material_id=5)) # Gold
-    meshes.append(create_sphere(center=[0.4, -0.7, 0.3], radius=0.3, material_id=7)) # Glass
+    meshes.append(create_sphere(center=[0.4, -0.7, 0.3], radius=0.3, material_id=6)) # Glass
 
     camera = {
         "origin": [0.0, 0.0, 3.5],
@@ -237,12 +246,10 @@ def create_scene():
     }
     return {"meshes": meshes, "materials": materials, "camera": camera}
 
-py_scene = create_scene()
-
 # --- Data Structures ---
 
 SpectralVector = ti.types.vector(SPECTRAL_BANDS, ti.f32)
-SpectralBool = ti.types.vector(SPECTRAL_BANDS, ti.i8)
+SpectralBool = ti.types.vector(SPECTRAL_BANDS, ti.i32)
 AABB = ti.types.struct(min=tm.vec3, max=tm.vec3)
 
 @ti.dataclass
@@ -275,9 +282,9 @@ class MaterialSample:
 
     scattering_coefficient: ti.f32
     anistropy_factor: ti.f32
-    is_true_volume:ti.i8
+    is_true_volume:ti.i32
 
-    surface_emission: ti.i8
+    surface_emission: ti.i32
     emission: ti.f32
     eem_id: ti.i32
 
@@ -289,9 +296,9 @@ class Ray:
     active_wavelength_idx: ti.i32
     transport_wavelength_idx: ti.i32
     path_length: ti.i32 #Track bounces, 
-    has_terminated: ti.i8
+    has_terminated: ti.i32
     vol_mat_id: ti.i32
-    has_escaped: ti.i8
+    has_escaped: ti.i32
     surface_pdf: ti.f32
     penetrated_tri_idx: ti.i32
 
@@ -316,18 +323,18 @@ class HitRecord:
     u: ti.f32 # Barycentric coord
     v: ti.f32 # Barycentric coord
     is_hit: ti.i32
-    is_front_face: ti.i8
+    is_front_face: ti.i32
     tri_idx: ti.i32
 
 @ti.dataclass
 class VolumeEvent:
-    hit_action: ti.i8 #1:hit surface, 2:scattered, 3:fluoresce
+    hit_action: ti.i32 #1:hit surface, 2:scattered, 3:fluoresce
     travel_distance: ti.f32
     estimator: ti.f32
     
     normal: tm.vec3
     shading_normal: tm.vec3
-    is_front_face: ti.i8
+    is_front_face: ti.i32
     hit_mat_id: ti.i32
     tri_idx: ti.i32
     
@@ -337,7 +344,7 @@ class VolumeEvent:
 
 @ti.dataclass
 class SurfaceEvent:
-    did_reflect: ti.i8
+    did_reflect: ti.i32
     position: tm.vec3
     direction: tm.vec3
     estimator: ti.f32
@@ -361,7 +368,7 @@ pixels_geometry = ti.Vector.field(3, dtype=ti.f32, shape=(RENDER_WIDTH, RENDER_H
 # Scene Data
 transport_wavelength_idx = ti.field(ti.i32,shape=(RENDER_WIDTH, RENDER_HEIGHT))
 active_wavelength_idx = ti.field(ti.i32,shape=(RENDER_WIDTH, RENDER_HEIGHT))
-reemission_matrix = ti.Matrix.field(SPECTRAL_BANDS, SPECTRAL_BANDS, dtype=ti.f32, shape=(2))
+reemission_matrix = ti.Matrix.field(SPECTRAL_BANDS, SPECTRAL_BANDS, dtype=ti.f32, shape=(numEEM))
 num_scene_objects = ti.field(ti.i32, shape=())
 
 # Camera
@@ -388,7 +395,9 @@ normalization_factor[None] = np.sum(cs_srgb.cmf[:, 1]) * WAVELENGTH_STEP
 # --- Scene Compilation ---
 
 def get_scene_dimensions(scene_dict):
-    """ Parses the scene dictionary to determine the required sizes for Taichi fields. """
+    """
+    Parses the scene dictionary to determine the required sizes for Taichi fields.
+    """
     num_materials = len(scene_dict.get('materials', []))
     
     num_triangles = 0
@@ -425,7 +434,9 @@ def get_scene_dimensions(scene_dict):
     }
 
 def build_bvh(py_triangles):
-    """ Builds the BVH and returns reordered triangles and the BVH node list. """
+    """
+    Builds the BVH and returns reordered triangles and the BVH node list.
+    """
     num_tris = len(py_triangles)
     if num_tris == 0:
         return [], []
@@ -495,7 +506,9 @@ def build_bvh(py_triangles):
     return triangles_reordered, bvh_list
 
 def setup_scene(scene_dict):
-    """ Populates the already-placed Taichi fields with scene data. """
+    """
+    Populates the already-placed Taichi fields with scene data.
+    """
     # --- 1. Process Python scene data ---
     py_materials = scene_dict["materials"]
     py_triangles = []
@@ -615,7 +628,6 @@ def setup_scene(scene_dict):
     # Camera
     cam_origin[None], cam_lookat[None], cam_up[None] = scene_dict["camera"]["origin"], scene_dict["camera"]["lookat"], scene_dict["camera"]["up"]
     update_camera()
-    initialize_procedurals()
 
 @ti.kernel
 def update_camera():
@@ -627,30 +639,42 @@ def update_camera():
     cam_v[None]=v
 
 @ti.kernel
-def initialize_procedurals():
-    # TODO, this doesn't need to happen here
+def create_eem(excite_wave:int, emit_wave:int, dist:float, rel_amp:float, amp:float, amp2:float):
+    '''
+    Taichi Kernel that generates a Excitation Emission Matrix using a Gaussian Normal Distribution
+
+    Inputs:
+        excite_wave: the excitation wavelength, nm
+        emit_wave: the emission wavelength, nm
+        amp: The maximum height of the curve at the center for the excitation wave
+        amp2: The maximum height of the curve at the center for the emission wave
+        dist: The absolute distance from the center where the curve reaches a specific drop-off height. Must be greater than 0
+        rel_amp: The relative amplitude drop-off at dist. This is a multiplier of amp and must be strictly in the range (0, 1)
+    '''
+    
     #Excitation Emission Matrices
     eem_id = 1
     ti.loop_config(serialize=True)
+    temp_eem = np.empty((SPECTRAL_BANDS,SPECTRAL_BANDS))
     for i in ti.ndrange(SPECTRAL_BANDS):
         i_wav = (WAVELENGTH_MIN + i * WAVELENGTH_STEP)
         # Excitations
-        
-        #UltraViolet -> Green
-        excite_max1 = 210
-        exitation = normal_dist(i_wav, excite_max1, 100.0, 0.01, 1.0)
-        #print(exitation)
+        exitation = normal_dist(i_wav, excite_wave, dist, rel_amp, amp)
         total = 0.0
         for j in ti.ndrange(SPECTRAL_BANDS):
             j_wav = (WAVELENGTH_MIN + j * WAVELENGTH_STEP)
             # Emissions
-
-            # Ultra Violet -> Green
-            target1 = 510
-            shift1 = target1 - excite_max1  
-            emission = normal_dist(j_wav, excite_max1 + shift1, 100.0, 0.01, 0.5) 
-            reemission_matrix[eem_id][i, j] = emission * exitation
-            total+= reemission_matrix[eem_id][i, j]
+            emission = normal_dist(j_wav, emit_wave, dist, rel_amp, amp2) 
+            temp_eem[i, j] = emission * exitation
+            total+= temp_eem[i, j]
+    
+    eem_object = data.EEMMatrix(
+        matrix=temp_eem, 
+        wavelength_min=WAVELENGTH_MIN,
+        wavelength_max=WAVELENGTH_MAX,
+        spectral_bands=SPECTRAL_BANDS
+    )
+    reemission_matrix[eem_object.id] = eem_object.matrix
 
 # --- Utility Functions
 
@@ -663,7 +687,9 @@ def random_in_unit_sphere() -> tm.vec3:
 
 @ti.func
 def cosine_weighted_hemisphere_direction(normal: tm.vec3) -> tm.vec3:
-    """Generates a random direction on a hemisphere with a cosine distribution."""
+    """
+    Generates a random direction on a hemisphere with a cosine distribution.
+    """
     r1 = ti.random()
     r2 = ti.random()
     phi = 2.0 * tm.pi * r1
@@ -711,6 +737,18 @@ def random_rotation_in_unit_cone(direction: tm.vec3, half_angle: ti.f32) -> tm.v
 
 @ti.func
 def normal_dist(x:ti.f32, center:ti.f32, dist:ti.f32, rel_amp:ti.f32, amp:ti.f32):
+    '''
+    Calculates a height from a coordinate in a Gaussian Normal Distribution
+
+    Inputs:
+        x: The coordinate at which to evaluate the function
+        center: The coordinate of the curve's peak
+        amp: The maximum height of the curve at the center 
+        dist: The absolute distance from the center where the curve reaches a specific drop-off height. Must be greater than 0
+        rel_amp: The relative amplitude drop-off at dist. This is a multiplier of amp and must be strictly in the range (0, 1)
+    Outputs:
+        The evaluated height of the Gaussian curve at coordinate x
+    '''
     o_term = dist / ti.sqrt(-2 * tm.log(rel_amp))
     exponent = ti.exp( -( (x - center)**2 / (2*o_term**2) ) )
     scale = amp
@@ -718,7 +756,9 @@ def normal_dist(x:ti.f32, center:ti.f32, dist:ti.f32, rel_amp:ti.f32, amp:ti.f32
 
 @ti.func
 def evaluate_henyey_greenstein(cos_theta: ti.f32, g: ti.f32) -> ti.f32:
-    """ Evaluates the Henyey-Greenstein phase function. """
+    """
+    Evaluates the Henyey-Greenstein phase function.
+    """
     g2 = g * g
     denom = 1.0 + g2 - 2.0 * g * cos_theta
     # Add epsilon to prevent division by zero with certain g and cos_theta values
@@ -726,7 +766,9 @@ def evaluate_henyey_greenstein(cos_theta: ti.f32, g: ti.f32) -> ti.f32:
 
 @ti.func
 def sample_henyey_greenstein(incoming_dir: tm.vec3, g: ti.f32) -> tm.vec3:
-    """ Samples a direction based on the Henyey-Greenstein phase function. """
+    """
+    Samples a direction based on the Henyey-Greenstein phase function.
+    """
     cos_theta = 0.0
     # Special case for isotropic scattering
     if abs(g) < 1e-4:
@@ -752,7 +794,7 @@ def sample_henyey_greenstein(incoming_dir: tm.vec3, g: ti.f32) -> tm.vec3:
 # --- Ray-Geometry Intersection
 
 @ti.func
-def intersect_aabb(position, inv_dir, aabb: AABB) -> ti.i8:
+def intersect_aabb(position, inv_dir, aabb: AABB) -> ti.i32:
     t_min = (aabb.min - position) * inv_dir
     t_max = (aabb.max - position) * inv_dir
     t0 = tm.min(t_min, t_max)
@@ -817,7 +859,7 @@ def trace(position: tm.vec3, direction:tm.vec3) -> HitRecord:
     if hit.is_hit:
         hit.normal = triangles[hit.tri_idx].normal 
         hit.shading_normal = tm.normalize((1.0 - hit.u - hit.v) * triangles[hit.tri_idx].n0 + hit.u * triangles[hit.tri_idx].n1 + hit.v * triangles[hit.tri_idx].n2)
-        hit.is_front_face = ti.cast(tm.dot(direction, hit.normal) < 0.0, ti.i8)
+        hit.is_front_face = ti.cast(tm.dot(direction, hit.normal) < 0.0, ti.i32)
     return hit
 
 # --- Complex arythmetic
@@ -1570,6 +1612,7 @@ if __name__ == "__main__":
     scene_dims = get_scene_dimensions(py_scene)    
 
     # Consolidated field for all f32 spectral properties
+    reemission_matrix[fluorescent_glass.id] = fluorescent_glass.matrix
     material_props_f32 = ti.field(dtype=ti.f32, shape=(
         scene_dims["num_materials"],
         NUM_F32_PROPERTIES,
