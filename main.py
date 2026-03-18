@@ -139,13 +139,13 @@ def create_scene():
             "is_true_volume": [0] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
             "surface_emission": [1] * SPECTRAL_BANDS, 
-            "emission": [500.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
+            "emission": [50.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
             "eem_id": 0
         },
         { # 5: Gold Metal
             "refractive_index": gold_ior.n, 
             "extinction_coefficient": gold_ior.k,
-            "roughness": [0.1] * SPECTRAL_BANDS, 
+            "roughness": [0.001] * SPECTRAL_BANDS, 
             "is_true_volume": [1] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
             "surface_emission": [0] * SPECTRAL_BANDS, 
@@ -162,14 +162,14 @@ def create_scene():
             "emission": [0.0] * SPECTRAL_BANDS,
             "eem_id": 1
         },
-        { # 7: Glowing  Glass Dielectric
+        { # 7: Glass Dielectric
             "refractive_index": [3.0] * SPECTRAL_BANDS, 
             "extinction_coefficient": [0.0]*(SPECTRAL_BANDS),
             "roughness": [0.001] * SPECTRAL_BANDS, 
             "is_true_volume": [1] * SPECTRAL_BANDS,
             "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [1] * SPECTRAL_BANDS, 
-            "emission": [1.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
             "eem_id": 0
         }
     ]
@@ -301,6 +301,7 @@ class Ray:
     has_escaped: ti.i32
     surface_pdf: ti.f32
     penetrated_tri_idx: ti.i32
+    is_reflected: ti.i32
 
 @ti.dataclass
 class GeoRay:
@@ -899,11 +900,11 @@ def complex_sqrt(z):
 @ti.func
 def normaldistrobution_ggx(NdotH: ti.f32, roughness: ti.f32) -> ti.f32:
     alpha = roughness * roughness
-    alpha = tm.max(alpha, 1e-5)
+    #alpha = tm.max(alpha, 1e-5)
     a2 = alpha * alpha
     NdotH2 = NdotH * NdotH
     denom = (NdotH2 * (a2 - 1.0) + 1.0)
-    return a2 / (tm.pi * denom * denom + 1e-7)
+    return a2 / (tm.pi * denom * denom)
 
 @ti.func
 def geometry_smith_ggx(normVec: tm.vec3, viewVec: tm.vec3, lightVec: tm.vec3, roughness: ti.f32):
@@ -1027,21 +1028,29 @@ def scatter_surface(ray: Ray, vol_event:VolumeEvent) -> SurfaceEvent:
     if rand < reflactance:
         # --- PATH 1: SPECULAR REFLECTION (GGX) ---
         reflection_direction = tm.reflect(ray.direction, halfVec)
-        NdotL = tm.max(0.0,tm.dot(normal_surface, reflection_direction))
-        NdotH = tm.max(0.0, tm.dot(normal_surface, halfVec))
-        NdotV = tm.max(0.0, tm.dot(normal_surface, view_surface))
-        
-        D = normaldistrobution_ggx(NdotH, surface_material.roughness)
-        G = geometry_smith_ggx(normal_surface, view_surface, reflection_direction, surface_material.roughness)
+        if surface_material.roughness < 0.008: ##TODO, find value of roughness where this is a seemless transition
+            #GGX microfacet model is numerically unstable at low roughness
+            result.direction = reflection_direction
+            result.did_reflect = 1
+            # For a delta distribution, D, G, and PDF cancel out.
+            result.estimator = reflactance 
+            result.pdf = 1e9 
+        else:
+            NdotL = tm.max(1e-4,tm.dot(normal_surface, reflection_direction))
+            NdotH = tm.max(1e-4, tm.dot(normal_surface, halfVec))
+            NdotV = tm.max(1e-4, tm.dot(normal_surface, view_surface))
+            
+            D = normaldistrobution_ggx(NdotH, surface_material.roughness)
+            G = geometry_smith_ggx(normal_surface, view_surface, reflection_direction, surface_material.roughness)
 
-        bsdf = (D * G * reflactance) / (4.0 * NdotL * NdotV + 1e-6)
-        pdf = (D * NdotH)/ (4.0 * imcoming_angle + 1e-6)
+            bsdf = (D * G * reflactance) / (4.0 * NdotL * NdotV)
+            pdf = (D * NdotH)/ (4.0 * imcoming_angle)
 
-        result.direction = reflection_direction
-        result.did_reflect = 1
-        cos_theta = tm.max(0.0, tm.dot(normal_surface, reflection_direction))
-        result.estimator = (bsdf * cos_theta)/(pdf + 1e-6)
-        result.pdf = (pdf + 1e-6)
+            result.direction = reflection_direction
+            result.did_reflect = 1
+            cos_theta = tm.max(0.0, tm.dot(normal_surface, reflection_direction))
+            result.estimator = (bsdf * cos_theta)/(pdf)
+            result.pdf = (pdf)
 
     else: 
         # --- Penetration  ---
@@ -1111,8 +1120,8 @@ def scatter_surface(ray: Ray, vol_event:VolumeEvent) -> SurfaceEvent:
                     fluorescence_transmittance = ti.exp(-absorb_coeff * dist_to_event)
                     bsdf *= fluorescence_transmittance #Switch to absorbed re-emitted light
             
-            result.estimator = (bsdf * NdotL)/(pdf + 1e-6)
-            result.pdf = (pdf + 1e-6)
+            result.estimator = (bsdf * NdotL)/(pdf)
+            result.pdf = (pdf)
             result.direction = scatter_direction
 
         else:
@@ -1122,31 +1131,59 @@ def scatter_surface(ray: Ray, vol_event:VolumeEvent) -> SurfaceEvent:
             if refraction_direction.norm_sqr() < 1e-4:
                 # Total Internal Reflection
                 reflection_direction = tm.reflect(ray.direction, halfVec)
+                if surface_material.roughness < 0.008: ##TODO, find value of roughness where this is a seemless transition
+                    #GGX microfacet model is numerically unstable at low roughness
+                    result.direction = reflection_direction
+                    result.did_reflect = 1
+                    # For a delta distribution, D, G, and PDF cancel out.
+                    result.estimator = reflactance 
+                    result.pdf = 1e9 
+                else:
+                    NdotL = tm.max(1e-4,tm.dot(normal_surface, reflection_direction))
+                    NdotH = tm.max(1e-4, tm.dot(normal_surface, halfVec))
+                    NdotV = tm.max(1e-4, tm.dot(normal_surface, view_surface))
+                    
+                    D = normaldistrobution_ggx(NdotH, surface_material.roughness)
+                    G = geometry_smith_ggx(normal_surface, view_surface, reflection_direction, surface_material.roughness)
 
-                NdotL = tm.max(1e-4,tm.dot(normal_surface, reflection_direction))
-                NdotH = tm.max(1e-4, tm.dot(normal_surface, halfVec))
-                NdotV = tm.max(1e-4, tm.dot(normal_surface, view_surface))
-                
-                D = normaldistrobution_ggx(NdotH, surface_material.roughness)
-                G = geometry_smith_ggx(normal_surface, view_surface, reflection_direction, surface_material.roughness)
+                    bsdf = (D * G * reflactance) / (4.0 * NdotL * NdotV)
+                    pdf = (D * NdotH)/ (4.0 * imcoming_angle) 
 
-                bsdf = (D * G * reflactance) / (4.0 * NdotL * NdotV + 1e-4)
-                pdf = (D * NdotH)/ (4.0 * imcoming_angle + 1e-4) 
-
-                result.direction = reflection_direction
-                result.did_reflect = 1
-                cos_theta = ti.abs(tm.dot(normal_surface, reflection_direction))
-                result.estimator = (bsdf * cos_theta)/(pdf + 1e-6)
-                result.pdf = (pdf + 1e-6)
-                
+                    result.direction = reflection_direction
+                    result.did_reflect = 1
+                    cos_theta = ti.abs(tm.dot(normal_surface, reflection_direction))
+                    result.estimator = (bsdf * cos_theta)/(pdf)
+                    result.pdf = (pdf)    
             else: 
                 # Refraction
                 result.did_reflect = 0
                 result.direction = refraction_direction
-                bsdf = (1.0 - reflactance)
-                pdf = 1.0
-                result.estimator = (bsdf)/(pdf + 1e-6)
-                result.pdf = (pdf + 1e-6)
+                
+                if surface_material.roughness < 0.0018:
+                    pdf = 1e9
+                    result.estimator = (1.0 - reflactance)
+                    result.pdf = 1e9
+                else:
+                    LdotH = tm.dot(refraction_direction, halfVec)
+                    VdotH = tm.dot(view_surface, halfVec)
+                    NdotH = tm.max(1e-4, tm.dot(normal_surface, halfVec))
+                    NdotL = tm.max(1e-4, ti.abs(tm.dot(normal_surface, refraction_direction)))
+                    NdotV = tm.max(1e-4, ti.abs(tm.dot(normal_surface, view_surface)))
+
+                    G = geometry_smith_ggx(normal_surface, view_surface, refraction_direction, surface_material.roughness)
+                    D = normaldistrobution_ggx(NdotH, surface_material.roughness)
+                    
+                    denom = (refraction_index_incoming * VdotH + refraction_index_surface * LdotH)
+                    denom_sq = denom * denom
+                    
+                    bsdf_term1 = (ti.abs(LdotH * VdotH)) / (NdotL * NdotV)
+                    bsdf_term2 = (refraction_index_surface**2 * (1.0 - reflactance) * D * G) / denom_sq
+                    bsdf = bsdf_term1 * bsdf_term2
+                    
+                    pdf = (D * NdotH * (1.0 - reflactance) * refraction_index_surface**2 * ti.abs(LdotH)) / denom_sq
+                    
+                    result.estimator = (bsdf * NdotL) / (pdf)
+                    result.pdf = pdf
 
     return result
 
@@ -1264,6 +1301,7 @@ def sample_direct_light(ray:Ray, normVec: tm.vec3, surf_mat_id: ti.i32) -> NEE_S
     vol_mat_id = ray.vol_mat_id
     viewVec = -ray.direction
     wavelength_idx = ray.active_wavelength_idx
+    is_reflected = ray.is_reflected
 
     num_lights_for_band = num_lights_per_band[wavelength_idx]
     if num_lights_for_band > 0:
@@ -1304,7 +1342,7 @@ def sample_direct_light(ray:Ray, normVec: tm.vec3, surf_mat_id: ti.i32) -> NEE_S
             if surf_mat_id != -1: # We are on a surface
                 #EvaluateBSDFInput = (vol_mat_id=, surf_mat_id=, viewVec=, direction_to_light=,normVec=,wavelength_ids=)
                 cos_theta = tm.max(0.0, tm.dot(normVec, direction_to_light)) # surface angle
-                bsdf, pdf = evaluate_bsdf(vol_mat_id, surf_mat_id, viewVec, direction_to_light, normVec, wavelength_idx)
+                bsdf, pdf = evaluate_bsdf(vol_mat_id, surf_mat_id, viewVec, direction_to_light, normVec, wavelength_idx, is_reflected)
             else:
                 cos_theta = tm.max(0.0, tm.dot(ray.direction, direction_to_light))
                 bsdf = evaluate_henyey_greenstein(cos_theta, get_mat(vol_mat_id, wavelength_idx).anistropy_factor)
@@ -1320,7 +1358,7 @@ def sample_direct_light(ray:Ray, normVec: tm.vec3, surf_mat_id: ti.i32) -> NEE_S
     return result
 
 @ti.func
-def evaluate_bsdf(vol_mat_id: ti.i32, surf_mat_id:ti.i32, viewVec: tm.vec3, lightVec: tm.vec3, normVec: tm.vec3, wavelength_idx:ti.i32):
+def evaluate_bsdf(vol_mat_id: ti.i32, surf_mat_id:ti.i32, viewVec: tm.vec3, lightVec: tm.vec3, normVec: tm.vec3, wavelength_idx:ti.i32, is_reflected):
     vol_mat = get_mat(vol_mat_id, wavelength_idx)
     surf_mat = get_mat(surf_mat_id, wavelength_idx)
 
@@ -1329,47 +1367,78 @@ def evaluate_bsdf(vol_mat_id: ti.i32, surf_mat_id:ti.i32, viewVec: tm.vec3, ligh
     n_t = surf_mat.refractive_index
     k_t = surf_mat.extinction_coefficient
     
-    halfVec = tm.normalize(viewVec + lightVec)
-    imcoming_angle = tm.max(1e-4,tm.dot(viewVec, halfVec))
-
     NdotL = tm.max(1e-4,tm.dot(normVec, lightVec))
-    NdotH = tm.max(1e-4, tm.dot(normVec, halfVec))
     NdotV = tm.max(1e-4, tm.dot(normVec, viewVec))
     
-    # --- Specular Term
-    F = fresnel_spectral(imcoming_angle, n_i, k_i, n_t, k_t)
-    D = normaldistrobution_ggx(NdotH, surf_mat.roughness)
-    G = geometry_smith_ggx(normVec, viewVec, lightVec, surf_mat.roughness)
-
-    specular_bsdf = (D * G * F) / (4.0 * NdotL * NdotV)
-    specular_pdf = (D * NdotH * F)/ (4.0 * imcoming_angle + 1e-4)
-
-    # --- Diffuse Termm     
-
-    absorb_coeff = (4.0 * tm.pi * k_t * 1e9) / (WAVELENGTH_MIN + wavelength_idx * WAVELENGTH_STEP)
-    diffuse_albedo = surf_mat.scattering_coefficient / (surf_mat.scattering_coefficient + absorb_coeff + 1e-6)
-    sigma = surf_mat.roughness * tm.pi / 2
-    sigma2 = sigma * sigma
-    A = 1.0 - sigma2 / (2.0 * (sigma2 + 0.33))
-    B = 0.45 * sigma2 / (sigma2 + 0.09)
-    #Compute Angles
-    theta_i = tm.acos(NdotL)
-    theta_o = tm.acos(NdotV)
-    alpha = tm.max(theta_i, theta_o)
-    beta = tm.min(theta_i, theta_o)
-    #Compute azimuthal difference. cos(phi_i - phi_o)
-    cos_phi_diff=0.0
-    if NdotL > 1e-4 and NdotV > 1e-4:
-        proj_i = tm.normalize(lightVec - normVec * NdotL)
-        proj_o = tm.normalize(viewVec - normVec * NdotV)
-        cos_phi_diff = tm.max(0.0, tm.dot(proj_i, proj_o))
+    is_reflected = ti.cast(NdotV * NdotL > 0.0, ti.i32)
     
-    diffuse_bsdf = (1.0 - F) * (1.0 - surf_mat.is_true_volume) * (diffuse_albedo / tm.pi) * (A + B * cos_phi_diff * tm.sin(alpha) * tm.tan(beta))
-    diffuse_pdf = NdotL * 0.318309886184 * (1.0 - F) * (1.0 - surf_mat.is_true_volume)
+    bsdf = 0.0
+    pdf = 0.0
     
-    # --- Merge 
-    bsdf = specular_bsdf + diffuse_bsdf
-    pdf = specular_pdf + diffuse_pdf
+    if is_reflected:
+        halfVec = tm.normalize(viewVec + lightVec)
+        if tm.dot(halfVec, normVec) < 0.0: halfVec = -halfVec
+        VdotH = tm.max(1e-4,tm.dot(viewVec, halfVec))
+        F = fresnel_spectral(VdotH, n_i, k_i, n_t, k_t)
+        
+        if surf_mat.roughness > 0.008:
+            # Specular Term
+            NdotH = tm.max(1e-4, tm.dot(normVec, halfVec))
+            
+            D = normaldistrobution_ggx(NdotH, surf_mat.roughness)
+            G = geometry_smith_ggx(normVec, viewVec, lightVec, surf_mat.roughness)
+
+            bsdf += (D * G * F) / (4.0 * NdotL * NdotV)
+            pdf += (D * NdotH * F)/ (4.0 * VdotH)
+        
+        absorb_coeff = (4.0 * tm.pi * k_t * 1e9) / (WAVELENGTH_MIN + wavelength_idx * WAVELENGTH_STEP)
+        diffuse_albedo = surf_mat.scattering_coefficient / (surf_mat.scattering_coefficient + absorb_coeff + 1e-6)
+        sigma = surf_mat.roughness * tm.pi / 2
+        sigma2 = sigma * sigma
+        A = 1.0 - sigma2 / (2.0 * (sigma2 + 0.33))
+        B = 0.45 * sigma2 / (sigma2 + 0.09)
+        #Compute Angles
+        theta_i = tm.acos(NdotL)
+        theta_o = tm.acos(NdotV)
+        alpha = tm.max(theta_i, theta_o)
+        beta = tm.min(theta_i, theta_o)
+        #Compute azimuthal difference. cos(phi_i - phi_o)
+        cos_phi_diff=0.0
+        if NdotL > 1e-4 and NdotV > 1e-4:
+            proj_i = tm.normalize(lightVec - normVec * NdotL)
+            proj_o = tm.normalize(viewVec - normVec * NdotV)
+            cos_phi_diff = tm.max(0.0, tm.dot(proj_i, proj_o))
+        
+        bsdf += (1.0 - F) * (1.0 - surf_mat.is_true_volume) * (diffuse_albedo / tm.pi) * (A + B * cos_phi_diff * tm.sin(alpha) * tm.tan(beta))
+        pdf += NdotL * 0.318309886184 * (1.0 - F) * (1.0 - surf_mat.is_true_volume)
+    else:
+        # Transmission
+        # Generalized halfway vector for refraction
+        if surf_mat.roughness > 0.008:
+            halfVec = -tm.normalize(viewVec * n_i + lightVec * n_t)
+            if tm.dot(halfVec, normVec) < 0.0: halfVec = -halfVec
+            
+            VdotH = tm.dot(viewVec, halfVec)
+            LdotH = tm.dot(lightVec, halfVec)
+            NdotH = tm.max(1e-4, tm.dot(normVec, halfVec))
+            
+            # Only valid if light and view are on correct sides of the microfacet
+            if VdotH * LdotH < 0.0: 
+                F = fresnel_spectral(ti.abs(VdotH), n_i, k_i, n_t, k_t)
+                D = normaldistrobution_ggx(NdotH, surf_mat.roughness)
+                G = geometry_smith_ggx(normVec, viewVec, lightVec, surf_mat.roughness)
+                
+                # The Jacobian denominator
+                denom = (n_i * VdotH + n_t * LdotH)
+                denom_sq = denom * denom
+                
+                # Transmission BSDF
+                bsdf_term1 = (ti.abs(LdotH * VdotH)) / (ti.abs(NdotL * NdotV))
+                bsdf_term2 = (n_t * n_t * (1.0 - F) * D * G) / denom_sq
+                bsdf += bsdf_term1 * bsdf_term2
+                
+                # Transmission PDF (incorporating the Jacobian)
+                pdf += (D * NdotH * (1.0 - F) * n_t * n_t * ti.abs(LdotH)) / denom_sq
     
     #EvaluateBSDFOutput = (bsdf=,pdf=)
     return bsdf, pdf
@@ -1397,7 +1466,7 @@ def shadow_transmittance(origin: tm.vec3, direction: tm.vec3, max_dist: ti.f32, 
         if hit.t >= (max_dist - distance_traveled) or hit.tri_idx==tri_idx:
             vol_mat = get_mat(current_vol_id, wavelength_idx)
             total_transmittance *= ti.exp(-(absorb_coeff + vol_mat.scattering_coefficient) * (max_dist - distance_traveled))
-            break 
+            break
         
         # Surface Interaction
         surface_mat = get_mat(hit.material_id, wavelength_idx)
@@ -1409,16 +1478,15 @@ def shadow_transmittance(origin: tm.vec3, direction: tm.vec3, max_dist: ti.f32, 
             n_t = get_mat(0, wavelength_idx).refractive_index  # Air
             k_t = get_mat(0, wavelength_idx).extinction_coefficient
         incident_normal = hit.shading_normal * hit.is_front_face - hit.shading_normal * (1.0 - hit.is_front_face)
-        #ior_ratio = n_i / (n_t)
-        #refracted_direction = tm.refract(shadow_ray.direction, incident_normal, ior_ratio)
-        if not surface_mat.is_true_volume:
-            total_transmittance = 0.0
-            break
-
-        cos_theta_i = ti.abs(tm.dot(shadow_ray.direction, incident_normal))
-        F = fresnel_spectral(cos_theta_i, n_i, k_i, n_t, k_t)
-        total_transmittance *= (1.0 - F)  #TODO Implement Attenuation from refraction
-        if total_transmittance < 1e-6:
+        
+        ior_ratio = n_i / (n_t)
+        refracted_direction = tm.refract(shadow_ray.direction, incident_normal, ior_ratio)
+                
+        refract_term = ((tm.dot(shadow_ray.direction, refracted_direction)) - 1)*37.9743 # (dot-1)/(1-cos(.23 rad))
+        angle_factor = 1/(1 + refract_term**4 * (3-2*refract_term))
+        total_transmittance *= angle_factor # Attentuate ray by refraction
+        
+        if total_transmittance < 1e-6 or not surface_mat.is_true_volume:
             total_transmittance = 0.0
             break
 
@@ -1503,6 +1571,7 @@ def cast_rays(current_sample_in_block: int, block_index:int):
                     ray.throughput *= surf_event.estimator
                     ray.position += event.normal * EPSILON * (surf_event.did_reflect - (1.0-surf_event.did_reflect))
                     ray.vol_mat_id = event.hit_mat_id * event.is_front_face * (1 - surf_event.did_reflect) + ray.vol_mat_id * surf_event.did_reflect # 0 (air) on backface
+                    ray.is_reflected = surf_event.did_reflect
 
             else:
                 NEE_sample = sample_direct_light(ray, event.shading_normal, event.hit_mat_id)
@@ -1656,13 +1725,67 @@ if __name__ == "__main__":
     print("Press 'c' to simulate camera movement (resets render).")
     print("Press ESC to exit.")
 
+    cam_pos = np.array(py_scene["camera"]["origin"], dtype=np.float32)
+    # Start facing down the -Z axis (standard for your setup)
+    cam_yaw = -np.pi / 2.0  
+    cam_pitch = 0.0
+    move_speed = 0.05
+    rot_speed = 0.03
+
     while gui.running:
         # --- Event Handling ---
         # Check for key presses to change state
         for e in gui.get_events(ti.GUI.PRESS):
             if e.key == ti.GUI.ESCAPE:
                 gui.running = False
-            elif e.key == 's':  # Switch mode
+            
+            camera_changed = False
+        
+            # Pull current forward (-w) and right (u) vectors from Taichi to guide WASD translation
+            # We flatten the Y component so we don't fly up/down when looking up/down (FPS style)
+            forward = -cam_w[None].to_numpy()
+            forward[1] = 0.0 
+            if np.linalg.norm(forward) > 1e-6:
+                forward = forward / np.linalg.norm(forward)
+                
+            right = cam_u[None].to_numpy()
+            right[1] = 0.0
+            if np.linalg.norm(right) > 1e-6:
+                right = right / np.linalg.norm(right)
+
+            if gui.is_pressed('w'):
+                cam_pos += forward * move_speed
+                camera_changed = True
+            if gui.is_pressed('s'):
+                cam_pos -= forward * move_speed
+                camera_changed = True
+            if gui.is_pressed('a'):
+                cam_pos -= right * move_speed
+                camera_changed = True
+            if gui.is_pressed('d'):
+                cam_pos += right * move_speed
+                camera_changed = True
+            if gui.is_pressed('e'):
+                cam_pos[1] += move_speed
+                camera_changed = True
+            if gui.is_pressed('q'):
+                cam_pos[1] -= move_speed
+                camera_changed = True
+            
+            if gui.is_pressed(ti.GUI.LEFT):
+                cam_yaw -= rot_speed
+                camera_changed = True
+            if gui.is_pressed(ti.GUI.RIGHT):
+                cam_yaw += rot_speed
+                camera_changed = True
+            if gui.is_pressed(ti.GUI.UP):
+                cam_pitch += rot_speed
+                camera_changed = True
+            if gui.is_pressed(ti.GUI.DOWN):
+                cam_pitch -= rot_speed
+                camera_changed = True
+            
+            if e.key == 'r':  # Switch mode
                 if render_mode == 'render':
                     render_mode = 'geometry'
                     print("Switched to Geometry Mode (Normals)")
@@ -1676,9 +1799,23 @@ if __name__ == "__main__":
                 num_blocks_completed = 0
                 rendering_finished = False
                 start_time = time.time()
+            
+            cam_pitch = max(-np.pi/2.0 + 0.01, min(np.pi/2.0 - 0.01, cam_pitch))
+            if camera_changed:
+                # Calculate the new look direction based on spherical coordinates
+                dir_x = np.cos(cam_yaw) * np.cos(cam_pitch)
+                dir_y = np.sin(cam_pitch)
+                dir_z = np.sin(cam_yaw) * np.cos(cam_pitch)
+                look_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
 
-            elif e.key == 'c':  # Camera movement placeholder
-                print("Camera moved. Resetting render...")
+                # Update the Taichi fields
+                cam_origin[None] = cam_pos
+                cam_lookat[None] = cam_pos + look_dir
+                
+                # Recalculate camera basis vectors (u, v, w) in Taichi
+                update_camera()
+
+                # Flush rendering state so the image doesn't smear
                 clear_pixel_space()
                 total_samples = 0
                 num_blocks_completed = 0
