@@ -1,33 +1,35 @@
 import taichi as ti
 import taichi.math as tm
+import trimesh
 import time
 import numpy as np
 import yaml
 import data 
+from logic_taichi import complex_mul, complex_div, complex_mod_sq, complex_sqrt
+from logic_python import ImaginaryNumber
 
 # --- Engine Initialization ---
-ti.init(arch=ti.cuda, default_fp=ti.f32)
+ti.init(arch=ti.cpu, default_fp=ti.f32)
+
+# --- CLI Arguments --- TODO: Iplement CLI Arguments
+SCENE_PATH = "cornell_box.glb"
 
 # --- Scene and Render Configuration ---
-
 ASPECT_RATIO = 1
 IMAGE_WIDTH = 800
 IMAGE_HEIGHT = int(IMAGE_WIDTH / ASPECT_RATIO)
 RESOLUTION_SCALE = 2
 
-# Scene
 EPSILON = 1e-4
 ESCAPE = 1e2
 MAX_PATH_LENGTH = 7
 SAMPLES_PER_PIXEL = 7000
 SCATTER_BOUNCES = 5
 
-# Spectral
 SPECTRAL_BANDS = 25
 WAVELENGTH_MAX = 1210
 WAVELENGTH_MIN = 10
 
-# Post Processing
 EXPOSURE = 1.0
 GAMMA = 2.0
 
@@ -51,7 +53,6 @@ PROP_SURFACE_EMISSION = 1
 NUM_INT_PROPERTIES = 2 # Total number of integer properties
 
 # --- Data Loading
-
 cs_srgb = data.ColourSystem(
     file_path="data/CMF/cie_cmf_xray_swir_vis.txt",
     red=[0.64, 0.33],
@@ -83,168 +84,6 @@ fluorescent_glass = data.EEMMatrix(
 )
 
 numEEM = data.EEMMatrix._next_eem_id
-
-# --- Python Data Structures
-
-def create_scene():
-    materials = [
-        { # 0: Air (Required for volumes)
-            "refractive_index": [1.0] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
-            "roughness": [0.0] * SPECTRAL_BANDS, 
-            "is_true_volume": [1] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.0]* SPECTRAL_BANDS,
-            "anistropy_factor":[.8] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        },
-        { # 1: White Diffuse
-            "refractive_index": [1.4] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
-            "roughness": [1.0] * SPECTRAL_BANDS, 
-            "is_true_volume": [0] * SPECTRAL_BANDS,
-            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
-            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        },
-        { # 2: Red Diffuse
-            "refractive_index": [1.4] * SPECTRAL_BANDS, 
-            "extinction_coefficient": k_1.vec,
-            "roughness": [0.001] * SPECTRAL_BANDS, 
-            "is_true_volume": [0] * SPECTRAL_BANDS,
-            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
-            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        },
-        { # 3: Green Diffuse
-            "refractive_index": [1.4] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
-            "roughness": [1.0] * SPECTRAL_BANDS, 
-            "is_true_volume": [0] * SPECTRAL_BANDS,
-            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
-            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        },
-        { # 4: Light Emission
-            "refractive_index": [1.0] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
-            "roughness": [0.0] * SPECTRAL_BANDS, 
-            "is_true_volume": [0] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [1] * SPECTRAL_BANDS, 
-            "emission": [50.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
-            "eem_id": 0
-        },
-        { # 5: Gold Metal
-            "refractive_index": gold_ior.n, 
-            "extinction_coefficient": gold_ior.k,
-            "roughness": [0.001] * SPECTRAL_BANDS, 
-            "is_true_volume": [1] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        },
-        { # 6: Fluorescent Glass Dielectric
-            "refractive_index": [3.0] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [1e-2]*8 + [0.0]*(SPECTRAL_BANDS-8),
-            "roughness": [0.001] * SPECTRAL_BANDS, 
-            "is_true_volume": [1] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 1
-        },
-        { # 7: Glass Dielectric
-            "refractive_index": [3.0] * SPECTRAL_BANDS, 
-            "extinction_coefficient": [0.0]*(SPECTRAL_BANDS),
-            "roughness": [0.001] * SPECTRAL_BANDS, 
-            "is_true_volume": [1] * SPECTRAL_BANDS,
-            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
-            "surface_emission": [0] * SPECTRAL_BANDS, 
-            "emission": [0.0] * SPECTRAL_BANDS,
-            "eem_id": 0
-        }
-    ]
-    # --- Geometry ---
-    meshes = []
-
-    # Cornell Box Walls (size 2x2x2, centered at origin)
-    # Floor
-    meshes.append({'vertices': [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 1})
-    # Ceiling
-    meshes.append({'vertices': [[-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 1})
-    # Back Wall
-    meshes.append({'vertices': [[-1, -1, -1], [-1, 1, -1], [1, 1, -1], [1, -1, -1]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 1})
-    # Right Wall 
-    meshes.append({'vertices': [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 2})
-    # Left Wall 
-    meshes.append({'vertices': [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 2})
-
-    # Light
-    meshes.append({'vertices': [[-0.3, 0.99, -0.3], [-0.3, 0.99, 0.3], [0.3, 0.99, 0.3], [0.3, 0.99, -0.3]], 'faces': [[0, 2, 1], [0, 3, 2]], 'material_id': 4})
-
-    # Add a sphere (approximated by triangles)
-    def create_sphere(center, radius, material_id, subdivisions=2):
-        # Create a base icosahedron
-        t = (1.0 + 5.0**0.5) / 2.0
-        vertices = [
-            [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
-            [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
-            [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]
-        ]
-        faces = [
-            [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-            [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-            [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-            [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
-        ]
-        # Normalize vertices to form a sphere
-        vertices = np.array(vertices, dtype=np.float32)
-        vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
-
-        # Subdivide faces
-        for _ in range(subdivisions):
-            new_faces = []
-            mid_points = {}
-            for face in faces:
-                v1, v2, v3 = face
-                m12 = tuple(sorted((v1, v2)))
-                m23 = tuple(sorted((v2, v3)))
-                m31 = tuple(sorted((v3, v1)))
-
-                for m in [m12, m23, m31]:
-                    if m not in mid_points:
-                        mid_point = (vertices[m[0]] + vertices[m[1]]) / 2.0
-                        mid_points[m] = len(vertices)
-                        vertices = np.vstack([vertices, mid_point / np.linalg.norm(mid_point)])
-
-                new_faces.append([v1, mid_points[m12], mid_points[m31]])
-                new_faces.append([v2, mid_points[m23], mid_points[m12]])
-                new_faces.append([v3, mid_points[m31], mid_points[m23]])
-                new_faces.append([mid_points[m12], mid_points[m23], mid_points[m31]])
-            faces = new_faces
-
-        final_vertices = (vertices * radius) + np.array(center)
-        vertex_normals = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
-        return {'vertices': final_vertices.tolist(), 'faces': faces, 'vertex_normals':vertex_normals.tolist(), 'material_id': material_id}
-
-    meshes.append(create_sphere(center=[-0.4, -0.7, -0.3], radius=0.3, material_id=5)) # Gold
-    meshes.append(create_sphere(center=[0.4, -0.7, 0.3], radius=0.3, material_id=6)) # Glass
-
-    camera = {
-        "origin": [0.0, 0.0, 3.5],
-        "lookat": [0.0, 0.0, -1.0],
-        "up": [0.0, 1.0, 0.0]
-    }
-    return {"meshes": meshes, "materials": materials, "camera": camera}
 
 # --- Data Structures ---
 
@@ -389,11 +228,138 @@ num_lights_per_band = ti.field(ti.i32, shape=SPECTRAL_BANDS)
 cmf_data = ti.Vector.field(3, dtype=ti.f32, shape=SPECTRAL_BANDS)
 xyz_to_rgb_matrix = ti.Matrix.field(3, 3, dtype=ti.f32, shape=())
 normalization_factor = ti.field(dtype=ti.f32, shape=())
-xyz_to_rgb_matrix.from_numpy(cs_srgb.T)
-cmf_data.from_numpy(cs_srgb.cmf)
+xyz_to_rgb_matrix.from_numpy(cs_srgb.T.astype(np.float32))
+cmf_data.from_numpy(cs_srgb.cmf.astype(np.float32))
 normalization_factor[None] = np.sum(cs_srgb.cmf[:, 1]) * WAVELENGTH_STEP
 
 # --- Scene Compilation ---
+def create_scene():
+    materials = [
+        { # 0: Air (Required for volumes)
+            "label": "Air",
+            "refractive_index": [1.0] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
+            "roughness": [0.0] * SPECTRAL_BANDS, 
+            "is_true_volume": [1] * SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0]* SPECTRAL_BANDS,
+            "anistropy_factor":[.8] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 1: White Diffuse
+            "label": "White_Diffuse",
+            "refractive_index": [1.4] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
+            "roughness": [1.0] * SPECTRAL_BANDS, 
+            "is_true_volume": [0] * SPECTRAL_BANDS,
+            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
+            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 2: Red Diffuse
+            "label": "Red_Diffuse",
+            "refractive_index": [1.4] * SPECTRAL_BANDS, 
+            "extinction_coefficient": k_1.vec,
+            "roughness": [0.001] * SPECTRAL_BANDS, 
+            "is_true_volume": [0] * SPECTRAL_BANDS,
+            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
+            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 3: Green Diffuse
+            "label": "Green_Diffuse",
+            "refractive_index": [1.4] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
+            "roughness": [1.0] * SPECTRAL_BANDS, 
+            "is_true_volume": [0] * SPECTRAL_BANDS,
+            "scattering_coefficient": [1.0] * SPECTRAL_BANDS,
+            "anistropy_factor":[0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 4: Light Emission
+            "label": "Light_Surface",
+            "refractive_index": [1.0] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [0.0] * SPECTRAL_BANDS,
+            "roughness": [0.0] * SPECTRAL_BANDS, 
+            "is_true_volume": [0] * SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
+            "surface_emission": [1] * SPECTRAL_BANDS, 
+            "emission": [50.0]*8 + [15.0] * (SPECTRAL_BANDS - 8),
+            "eem_id": 0
+        },
+        { # 5: Gold Metal
+            "label": "Gold_Metal",
+            "refractive_index": gold_ior.n, 
+            "extinction_coefficient": gold_ior.k,
+            "roughness": [0.001] * SPECTRAL_BANDS, 
+            "is_true_volume": [1] * SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 6: Glass Dielectric
+            "label": "Glass",
+            "refractive_index": [3.0] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [0.0]*(SPECTRAL_BANDS),
+            "roughness": [0.001] * SPECTRAL_BANDS, 
+            "is_true_volume": [1] * SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 0
+        },
+        { # 6: Fluorescent Glass Dielectric
+            "label": "Fluorescent",
+            "refractive_index": [3.0] * SPECTRAL_BANDS, 
+            "extinction_coefficient": [1e-2]*8 + [0.0]*(SPECTRAL_BANDS-8),
+            "roughness": [0.001] * SPECTRAL_BANDS, 
+            "is_true_volume": [1] * SPECTRAL_BANDS,
+            "scattering_coefficient": [0.0] * SPECTRAL_BANDS,
+            "surface_emission": [0] * SPECTRAL_BANDS, 
+            "emission": [0.0] * SPECTRAL_BANDS,
+            "eem_id": 1
+        },
+    ]
+    # --- Geometry ---
+    meshes = []
+    scene = trimesh.load(SCENE_PATH, merge_primitives=False)
+    #for name, geom in scene.geometry.items():
+        # Retrieve the material name assigned in Blender/Maya
+        #mat_id = int(geom.visual.material.name) 
+        #normals = geom.vertex_normals if hasattr(geom, 'vertex_normals') else None
+        #print(geom.vertices)
+        #meshes.append({'vertices':geom.vertices, 'faces':geom.faces, 'material_id':mat_id, 'vertex_normals':normals})
+
+    for node_name in scene.graph.nodes_geometry:
+        transform, geometry_name = scene.graph[node_name]
+        geom = scene.geometry[geometry_name].copy()
+        geom.apply_transform(transform)
+        mat_id = int(geom.visual.material.name) 
+        if hasattr(geom, 'vertex_normals') and len(geom.vertex_normals) > 0:
+            normals = geom.vertex_normals
+        else:
+            normals = None
+        meshes.append({
+            'vertices': geom.vertices, 
+            'faces': geom.faces, 
+            'material_id': mat_id, 
+            'vertex_normals': normals
+        })
+
+    camera = {
+        "origin": [0.0, 0.0, 3.5],
+        "lookat": [0.0, 0.0, -1.0],
+        "up": [0.0, 1.0, 0.0]
+    }
+    return {"meshes": meshes, "materials": materials, "camera": camera}
 
 def get_scene_dimensions(scene_dict):
     """
@@ -518,7 +484,7 @@ def setup_scene(scene_dict):
     for mesh in scene_dict["meshes"]:
         verts = np.array(mesh["vertices"], dtype=np.float32)
         mat_id = mesh["material_id"]
-        has_vertex_normals = 'vertex_normals' in mesh
+        has_vertex_normals = mesh.get('vertex_normals') is not None
         if has_vertex_normals:
             v_norms = np.array(mesh["vertex_normals"], dtype=np.float32)
         for face in mesh["faces"]:
@@ -627,17 +593,7 @@ def setup_scene(scene_dict):
             total_light_area_field[band_idx] = 0.0
 
     # Camera
-    cam_origin[None], cam_lookat[None], cam_up[None] = scene_dict["camera"]["origin"], scene_dict["camera"]["lookat"], scene_dict["camera"]["up"]
-    update_camera()
-
-@ti.kernel
-def update_camera():
-    w = tm.normalize(cam_origin[None] - cam_lookat[None])
-    u = tm.normalize(tm.cross(cam_up[None], w))
-    v = tm.cross(w, u)
-    cam_w[None]=w
-    cam_u[None]=u
-    cam_v[None]=v
+    cam_origin[None] = scene_dict["camera"]["origin"]
 
 @ti.kernel
 def create_eem(excite_wave:int, emit_wave:int, dist:float, rel_amp:float, amp:float, amp2:float):
@@ -677,8 +633,26 @@ def create_eem(excite_wave:int, emit_wave:int, dist:float, rel_amp:float, amp:fl
     )
     reemission_matrix[eem_object.id] = eem_object.matrix
 
-# --- Utility Functions
+# --- Reading
+@ti.func
+def get_mat(mat_id:ti.i32, wavelength_idx:ti.i32) -> MaterialSample:
+    mat_send = MaterialSample(
+        refractive_index = material_props_f32[mat_id, PROP_REFRACTIVE_INDEX, wavelength_idx],
+        extinction_coefficient = material_props_f32[mat_id, PROP_EXTINCTION_COEFFICIENT, wavelength_idx],
+        roughness = material_props_f32[mat_id, PROP_ROUGHNESS, wavelength_idx],
+        
+        scattering_coefficient = material_props_f32[mat_id, PROP_SCATTERING_COEFFICIENT, wavelength_idx],
+        emission = material_props_f32[mat_id, PROP_EMISSION, wavelength_idx],
+                
+        anistropy_factor = material_props_f32[mat_id, PROP_ANISTROPY_FACTOR, wavelength_idx],
+        is_true_volume = material_props_int[mat_id, PROP_IS_TRUE_VOLUME, wavelength_idx],
+        surface_emission = material_props_int[mat_id, PROP_SURFACE_EMISSION, wavelength_idx],
+        
+        eem_id = material_props_single_int[mat_id]
+    )
+    return mat_send
 
+# --- Utility Functions
 @ti.func
 def random_in_unit_sphere() -> tm.vec3:
     z = ti.random() * 2.0 - 1.0
@@ -863,38 +837,6 @@ def trace(position: tm.vec3, direction:tm.vec3) -> HitRecord:
         hit.is_front_face = ti.cast(tm.dot(direction, hit.normal) < 0.0, ti.i32)
     return hit
 
-# --- Complex arythmetic
-
-@ti.func
-def complex_mul(a, b):
-    """Multiplies two complex numbers (represented as 2D vectors)."""
-    # (ar + ai*i) * (br + bi*i) = (ar*br - ai*bi) + (ar*bi + ai*br)*i
-    return ti.Vector([a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]])
-
-@ti.func
-def complex_div(a, b):
-    """Divides two complex numbers (a / b)."""
-    # (a * b_conjugate) / |b|^2
-    b_conjugate = ti.Vector([b[0], -b[1]])
-    mod_sq = b[0]**2 + b[1]**2
-    return complex_mul(a, b_conjugate) / mod_sq
-
-@ti.func
-def complex_mod_sq(a):
-    """Calculates the modulus squared |a|^2 of a complex number."""
-    return a[0]**2 + a[1]**2
-
-@ti.func
-def complex_sqrt(z):
-    """Complex square root: sqrt(z)"""
-    mod_z = ti.sqrt(z[0]**2 + z[1]**2)
-    real_part = ti.sqrt((mod_z + z[0]) / 2.0)
-    imag_part = ti.math.sign(z[1]) * ti.sqrt((mod_z - z[0]) / 2.0)
-    # Handle the case where the imaginary part is zero
-    if z[1] == 0:
-        imag_part = 0.0
-    return ti.Vector([real_part, imag_part])
-
 # --- Ray Scattering Functions ---
 
 @ti.func
@@ -937,30 +879,31 @@ def fresnel_spectral(cos_theta_i: ti.f32, ni: ti.f32, ki: ti.f32, nt:ti.f32, kt:
     e_imag = 2 * nt * kt
     epsilon_tran = ti.Vector([e_real, e_imag])
 
-    # 2. Calculate angular terms
+    # Calculate angular terms
     cos_theta = ti.cos(income_angle)
     cos_theta_comp = ti.Vector([cos_theta, 0.0])
     sin_sq_theta = ti.sin(income_angle)**2
     sin_sq_theta_comp = ti.Vector([sin_sq_theta, 0.0])
 
-    # 4. Calculate r_s (s-polarization) using complex arithmetic
+    # Calculate r_s (s-polarization) using complex arithmetic
     leftterm = complex_mul(complex_sqrt(epsilon_in),cos_theta_comp)
     rightterm = complex_sqrt(epsilon_tran - complex_mul(epsilon_in,sin_sq_theta_comp))
     rs_num = leftterm - rightterm
     rs_den = leftterm + rightterm
     rs = complex_div(rs_num, rs_den)
 
-    # 5. Calculate r_p (p-polarization) using complex arithmetic
+    # Calculate r_p (p-polarization) using complex arithmetic
     leftterm = complex_mul(epsilon_tran, leftterm)
     rightterm = complex_mul(epsilon_in, rightterm)
     rp_num = leftterm - rightterm
     rp_den = leftterm + rightterm
     rp = complex_div(rp_num, rp_den)
     
-    # 6. Calculate reflectance by averaging the modulus squared of r_s and r_p
+    # Calculate reflectance by averaging the modulus squared of r_s and r_p
     Rs = complex_mod_sq(rs)
     Rp = complex_mod_sq(rp)
-    
+
+    # Merge, polarization is not supported
     reflectance = 0.5 * (Rs + Rp)
         
     return reflectance
@@ -977,26 +920,7 @@ def importance_sample_ggx(xi: tm.vec2, normVec: tm.vec3, alpha: ti.f32) -> tm.ve
     bitangent = tm.cross(normVec, tangent)
     return tm.normalize(tangent * h_local.x + bitangent * h_local.y + normVec * h_local.z)
 
-@ti.func
-def get_mat(mat_id:ti.i32, wavelength_idx:ti.i32) -> MaterialSample:
-    mat_send = MaterialSample(
-        refractive_index = material_props_f32[mat_id, PROP_REFRACTIVE_INDEX, wavelength_idx],
-        extinction_coefficient = material_props_f32[mat_id, PROP_EXTINCTION_COEFFICIENT, wavelength_idx],
-        roughness = material_props_f32[mat_id, PROP_ROUGHNESS, wavelength_idx],
-        
-        scattering_coefficient = material_props_f32[mat_id, PROP_SCATTERING_COEFFICIENT, wavelength_idx],
-        emission = material_props_f32[mat_id, PROP_EMISSION, wavelength_idx],
-                
-        anistropy_factor = material_props_f32[mat_id, PROP_ANISTROPY_FACTOR, wavelength_idx],
-        is_true_volume = material_props_int[mat_id, PROP_IS_TRUE_VOLUME, wavelength_idx],
-        surface_emission = material_props_int[mat_id, PROP_SURFACE_EMISSION, wavelength_idx],
-        
-        eem_id = material_props_single_int[mat_id]
-    )
-    return mat_send
-
 # --- Indirect Lighting ---
-
 @ti.func
 def scatter_surface(ray: Ray, vol_event:VolumeEvent) -> SurfaceEvent:
     """
@@ -1201,7 +1125,7 @@ def scatter_volume(ray: Ray) -> VolumeEvent:
 
     # --- Distance to Volume Event  ---
     absorption_coefficient = (4.0 * tm.pi * vol_mat.extinction_coefficient)/(WAVELENGTH_MIN * 1e-9 + ray.active_wavelength_idx * WAVELENGTH_STEP * 1e-9)
-    distance_to_volume_event = - ti.log(-ti.random() + 1 - 1e-7)/(vol_mat.scattering_coefficient + absorption_coefficient + 1e-6) 
+    distance_to_volume_event = - ti.log(-ti.random() + 1 + 1e-7)/(vol_mat.scattering_coefficient + absorption_coefficient + 1e-6) 
 
     #--- Distance to Surface Event ---
     hit = trace(ray.position, ray.direction)
@@ -1292,7 +1216,6 @@ def scatter_volume(ray: Ray) -> VolumeEvent:
     return result
 
 # --- Direct Lighting
-
 @ti.func
 def sample_direct_light(ray:Ray, normVec: tm.vec3, surf_mat_id: ti.i32) -> NEE_Sample:
     result = NEE_Sample()
@@ -1527,9 +1450,6 @@ def cast_rays(current_sample_in_block: int, block_index:int):
             has_escaped = 0,
             surface_pdf = 1.0,
             )
-        #path_contribution = SpectralVector(0.0)
-        #direct_path_contribution = 0.0
-        #indirect_path_contribution = 0.0
 
         for k in ti.ndrange(MAX_PATH_LENGTH):
             if ray.has_terminated:
@@ -1673,6 +1593,28 @@ def clear_pixel_space():
     for i, j in pixels_geometry:
         pixels_geometry[i, j] = tm.vec3(0.0)
 
+# Python Helpers
+def quat_to_euler(q):
+    """Converts a quaternion into standard Pitch, Yaw, Roll (in degrees)."""
+    # Roll (x-axis rotation)
+    sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z)
+    cosr_cosp = 1.0 - 2.0 * (q.x**2 + q.y**2)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2.0 * (q.w * q.y - q.z * q.x)
+    if abs(sinp) >= 1:
+        pitch = np.copysign(np.pi / 2.0, sinp) # clamp to 90 degrees if out of range
+    else:
+        pitch = np.arcsin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1.0 - 2.0 * (q.y**2 + q.z**2)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return np.degrees(pitch), np.degrees(yaw), np.degrees(roll)
+
 # --- Main Execution ---
 if __name__ == "__main__":
 
@@ -1711,7 +1653,9 @@ if __name__ == "__main__":
     print("Setting Scene...")
     setup_scene(py_scene)
 
-    gui = ti.GUI("Hyperspectral Path Tracer", res=(IMAGE_WIDTH, IMAGE_HEIGHT), fast_gui=True)
+    #gui = ti.GUI("Hyperspectral Path Tracer", res=(IMAGE_WIDTH, IMAGE_HEIGHT), fast_gui=True)
+    window = ti.ui.Window("Hyperspectral Path Tracer", res=(IMAGE_WIDTH, IMAGE_HEIGHT))
+    canvas = window.get_canvas()
 
     render_mode = 'render'  # Modes: 'render', 'geometry'
     total_samples = 0
@@ -1721,70 +1665,31 @@ if __name__ == "__main__":
 
     clear_pixel_space()
     print("Starting interactive renderer...")
-    print("Press 's' to switch between Render and Geometry modes.")
-    print("Press 'c' to simulate camera movement (resets render).")
+    print("Press 'r' to switch between Render and Geometry modes.")
     print("Press ESC to exit.")
 
     cam_pos = np.array(py_scene["camera"]["origin"], dtype=np.float32)
-    # Start facing down the -Z axis (standard for your setup)
-    cam_yaw = -np.pi / 2.0  
-    cam_pitch = 0.0
-    move_speed = 0.05
-    rot_speed = 0.03
+    cam_rotation = ImaginaryNumber()
 
-    while gui.running:
-        # --- Event Handling ---
-        # Check for key presses to change state
-        for e in gui.get_events(ti.GUI.PRESS):
-            if e.key == ti.GUI.ESCAPE:
-                gui.running = False
-            
-            camera_changed = False
+    world_forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    world_right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+    rot_speed = 0.01
+    thrust_power = 0.01
+    last_frame_time = time.time()
+    while window.running:
+        current_time = time.time()
+        dt = current_time - last_frame_time
+        last_frame_time = current_time
+        current_rot_speed = rot_speed * dt * 60.0
+        app_time = current_time - start_time
         
-            # Pull current forward (-w) and right (u) vectors from Taichi to guide WASD translation
-            # We flatten the Y component so we don't fly up/down when looking up/down (FPS style)
-            forward = -cam_w[None].to_numpy()
-            forward[1] = 0.0 
-            if np.linalg.norm(forward) > 1e-6:
-                forward = forward / np.linalg.norm(forward)
-                
-            right = cam_u[None].to_numpy()
-            right[1] = 0.0
-            if np.linalg.norm(right) > 1e-6:
-                right = right / np.linalg.norm(right)
+        # --- Event Handling ---
+        for e in window.get_events(ti.ui.PRESS):
+            if e.key == ti.ui.ESCAPE:
+                window.running = False
 
-            if gui.is_pressed('w'):
-                cam_pos += forward * move_speed
-                camera_changed = True
-            if gui.is_pressed('s'):
-                cam_pos -= forward * move_speed
-                camera_changed = True
-            if gui.is_pressed('a'):
-                cam_pos -= right * move_speed
-                camera_changed = True
-            if gui.is_pressed('d'):
-                cam_pos += right * move_speed
-                camera_changed = True
-            if gui.is_pressed('e'):
-                cam_pos[1] += move_speed
-                camera_changed = True
-            if gui.is_pressed('q'):
-                cam_pos[1] -= move_speed
-                camera_changed = True
-            
-            if gui.is_pressed(ti.GUI.LEFT):
-                cam_yaw -= rot_speed
-                camera_changed = True
-            if gui.is_pressed(ti.GUI.RIGHT):
-                cam_yaw += rot_speed
-                camera_changed = True
-            if gui.is_pressed(ti.GUI.UP):
-                cam_pitch += rot_speed
-                camera_changed = True
-            if gui.is_pressed(ti.GUI.DOWN):
-                cam_pitch -= rot_speed
-                camera_changed = True
-            
             if e.key == 'r':  # Switch mode
                 if render_mode == 'render':
                     render_mode = 'geometry'
@@ -1799,28 +1704,73 @@ if __name__ == "__main__":
                 num_blocks_completed = 0
                 rendering_finished = False
                 start_time = time.time()
+
+        camera_changed = False
+
+        forward = cam_rotation.rotate_vector(world_forward)
+        up = cam_rotation.rotate_vector(world_up)
+        right = cam_rotation.rotate_vector(world_right)
+        
+        # Rotation
+        if window.is_pressed(ti.ui.LEFT):
+            yaw_rot = ImaginaryNumber.from_axis_angle(up, current_rot_speed)
+            cam_rotation = (yaw_rot * cam_rotation).normalize()
+            camera_changed = True
+        if window.is_pressed(ti.ui.RIGHT):
+            yaw_rot = ImaginaryNumber.from_axis_angle(up, -current_rot_speed)
+            cam_rotation = (yaw_rot * cam_rotation).normalize()     
+            camera_changed = True
+        if window.is_pressed(ti.ui.UP):
+            pitch_rot = ImaginaryNumber.from_axis_angle(right, current_rot_speed)
+            cam_rotation = (pitch_rot * cam_rotation).normalize()
+            camera_changed = True
+        if window.is_pressed(ti.ui.DOWN):
+            pitch_rot = ImaginaryNumber.from_axis_angle(right, -current_rot_speed)
+            cam_rotation = (pitch_rot * cam_rotation).normalize()
+            camera_changed = True    
+        if window.is_pressed('e'):
+            roll_rot = ImaginaryNumber.from_axis_angle(forward, current_rot_speed)
+            cam_rotation = (roll_rot * cam_rotation).normalize()
+            camera_changed = True
+        if window.is_pressed('q'):
+            roll_rot = ImaginaryNumber.from_axis_angle(forward, -current_rot_speed)
+            cam_rotation = (roll_rot * cam_rotation).normalize()
+            camera_changed = True
+
+        # Displacement
+        if window.is_pressed('w'): 
+            cam_pos += forward * thrust_power
+            camera_changed = True
+        if window.is_pressed('s'): 
+            cam_pos -= forward * thrust_power
+            camera_changed = True
+        if window.is_pressed('d'): 
+            cam_pos += right * thrust_power
+            camera_changed = True
+        if window.is_pressed('a'): 
+            cam_pos -= right * thrust_power
+            camera_changed = True
+        if window.is_pressed('c'): 
+            cam_pos += up * thrust_power
+            camera_changed = True
+        if window.is_pressed('z'): 
+            cam_pos -= up * thrust_power
+            camera_changed = True
+        
+        if camera_changed:
+            # Update the Taichi fields
+            cam_origin[None] = cam_pos
             
-            cam_pitch = max(-np.pi/2.0 + 0.01, min(np.pi/2.0 - 0.01, cam_pitch))
-            if camera_changed:
-                # Calculate the new look direction based on spherical coordinates
-                dir_x = np.cos(cam_yaw) * np.cos(cam_pitch)
-                dir_y = np.sin(cam_pitch)
-                dir_z = np.sin(cam_yaw) * np.cos(cam_pitch)
-                look_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
+            cam_w[None] = -forward 
+            cam_u[None] = right
+            cam_v[None] = up
 
-                # Update the Taichi fields
-                cam_origin[None] = cam_pos
-                cam_lookat[None] = cam_pos + look_dir
-                
-                # Recalculate camera basis vectors (u, v, w) in Taichi
-                update_camera()
-
-                # Flush rendering state so the image doesn't smear
-                clear_pixel_space()
-                total_samples = 0
-                num_blocks_completed = 0
-                rendering_finished = False
-                start_time = time.time()
+            # Flush rendering state so the image doesn't smear
+            clear_pixel_space()
+            total_samples = 0
+            num_blocks_completed = 0
+            rendering_finished = False
+            start_time = time.time()
 
         # --- Rendering Logic ---
         if render_mode == 'render':
@@ -1842,5 +1792,21 @@ if __name__ == "__main__":
             visualize_normals()
 
         # --- Display Update ---
-        gui.set_image(pixels)
-        gui.show()
+        canvas.set_image(pixels)
+        gui = window.get_gui()
+        # Camera Position
+        with gui.sub_window("Coordinates", 0.02, 0.35, 0.35, 0.1) as w:
+            def fmt_pos(arr): return f"[{arr[0]:>6.2f}, {arr[1]:>6.2f}, {arr[2]:>6.2f}]"
+            
+            w.text(f"Coordinates        : {fmt_pos(cam_pos)}")
+        
+        with gui.sub_window("Spatial Gyroscope", 0.38, 0.02, 0.25, 0.15) as w:
+            # Extract Euler angles from your unified ship rotation
+            pitch, yaw, roll = quat_to_euler(cam_rotation)
+            
+            w.text("Ship Hull Orientation:")
+            w.text(f"  Pitch (X) : {pitch:>7.2f}°")
+            w.text(f"  Yaw   (Y) : {yaw:>7.2f}°")
+            w.text(f"  Roll  (Z) : {roll:>7.2f}°")
+
+        window.show()
